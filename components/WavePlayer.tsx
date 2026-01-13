@@ -59,6 +59,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       setCurrentTime(wavesurfer.getCurrentTime());
     });
 
+    // @ts-ignore - seek event exists but may not be in types
     wavesurfer.on("seek", () => {
       if (!isMounted) return;
       setCurrentTime(wavesurfer.getCurrentTime());

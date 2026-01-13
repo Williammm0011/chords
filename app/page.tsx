@@ -12,6 +12,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isValid, setIsValid] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadStatus, setDownloadStatus] = useState("");
 
   // Validate URL on change
   useEffect(() => {
@@ -33,15 +35,68 @@ export default function Home() {
     }
   }, [youtubeUrl]);
 
+  const pollProgress = async (jobId: string) => {
+    const maxAttempts = 120; // 2 minutes max (120 * 1 second)
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/download/progress?jobId=${jobId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          setError(data.error || "Failed to check progress");
+          setLoading(false);
+          return;
+        }
+
+        setDownloadProgress(data.progress || 0);
+        setDownloadStatus(data.status);
+
+        if (data.status === "completed" && data.audioUrl) {
+          setAudioUrl(data.audioUrl);
+          setLoading(false);
+          setDownloadProgress(100);
+          setDownloadStatus("Download complete!");
+          return;
+        }
+
+        if (data.status === "error") {
+          setError(data.error || "Download failed");
+          setLoading(false);
+          return;
+        }
+
+        // Continue polling if still downloading
+        attempts++;
+        if (attempts < maxAttempts && (data.status === "queued" || data.status === "downloading")) {
+          setTimeout(poll, 1000); // Poll every second
+        } else if (attempts >= maxAttempts) {
+          setError("Download timeout - please try again");
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Progress poll error:", err);
+        setError("Failed to check download progress");
+        setLoading(false);
+      }
+    };
+
+    poll();
+  };
+
   const handleFetchAudio = async () => {
     setError("");
     setLoading(true);
+    setDownloadProgress(0);
+    setDownloadStatus("Starting download...");
+    setAudioUrl(null);
 
     try {
       // Validate URL (redundant but safe)
       youtubeUrlSchema.parse(youtubeUrl);
 
-      // Call API
+      // Call API to start download
       const response = await fetch("/api/download", {
         method: "POST",
         headers: {
@@ -54,19 +109,25 @@ export default function Home() {
 
       if (!response.ok) {
         setError(data.error || "Failed to fetch audio");
+        setLoading(false);
         return;
       }
 
-      // Display the response
       console.log("API Response:", data);
-      setAudioUrl(data.audioUrl || null);
+
+      // Start polling for progress
+      if (data.jobId) {
+        pollProgress(data.jobId);
+      } else {
+        setError("No job ID received");
+        setLoading(false);
+      }
     } catch (err) {
       if (err instanceof z.ZodError) {
         setError(err.errors[0].message);
       } else {
         setError("An error occurred while fetching audio");
       }
-    } finally {
       setLoading(false);
     }
   };
@@ -119,6 +180,26 @@ export default function Home() {
                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 
                               text-red-700 dark:text-red-300 px-4 py-3 rounded-lg">
                   {error}
+                </div>
+              )}
+
+              {/* Progress Bar */}
+              {loading && (
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">
+                      {downloadStatus}
+                    </span>
+                    <span className="text-gray-600 dark:text-gray-400 font-mono">
+                      {downloadProgress}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-300 ease-out rounded-full"
+                      style={{ width: `${downloadProgress}%` }}
+                    />
+                  </div>
                 </div>
               )}
 

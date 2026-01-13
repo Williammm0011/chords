@@ -26,12 +26,13 @@ export const downloadRequestSchema = z.object({
 export type DownloadRequest = z.infer<typeof downloadRequestSchema>;
 
 /**
- * Download response schema (mocked for now)
+ * Download response schema
  */
 export interface DownloadResponse {
-  jobId: string;
+  jobId?: string;
   status: "ready" | "processing" | "error";
   audioUrl?: string;
   error?: string;
+  details?: string;
 }
 
