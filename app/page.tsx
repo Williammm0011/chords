@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { z } from "zod";
 import { youtubeUrlSchema, type DownloadResponse } from "@/lib/validation";
+import WavePlayer from "@/components/WavePlayer";
 
 export default function Home() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -137,18 +138,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Placeholder for waveform viewer */}
-          {audioUrl && (
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
-              <h2 className="text-2xl font-semibold mb-4 text-gray-800 dark:text-gray-100">
-                Waveform Viewer
-              </h2>
-              <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
-                <p>Waveform will be rendered here with wavesurfer.js</p>
-                <p className="text-sm mt-2">Audio URL: {audioUrl}</p>
-              </div>
-            </div>
-          )}
+          {/* Audio Player with Waveform */}
+          {audioUrl && <WavePlayer audioUrl={audioUrl} />}
         </div>
       </div>
     </div>
