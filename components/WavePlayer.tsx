@@ -12,6 +12,7 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
  * - Click waveform to seek to any position
  * - Press Space or click play button to play/pause
  * - Time display shows current time / total duration
+ * - Use zoom slider or +/− buttons to zoom in/out for precise editing
  * 
  * CREATING A LOOP REGION (3 methods):
  * 1. DRAG METHOD: Click and drag on waveform to select region
@@ -76,6 +77,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
   const [error, setError] = useState<string | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
   const [isLooping, setIsLooping] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(0); // 0 = default fit, higher = more zoomed
 
   // Use refs to store latest state for the interval (avoid stale closure)
   const currentRegionRef = useRef<Region | null>(null);
@@ -113,10 +115,13 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       barWidth: 2,
       barGap: 1,
       barRadius: 3,
-      height: 128,
-      normalize: true,
+      height: 250, // Fixed height, won't change with zoom
+      normalize: false, // Keep bar heights consistent regardless of zoom level
+      barHeight: 0.85,
       backend: "WebAudio",
       interact: true,
+      autoScroll: true, // Auto-scroll horizontally during playback when zoomed
+      autoCenter: true, // Keep playhead centered when zoomed
     });
 
     wavesurferRef.current = wavesurfer;
@@ -233,6 +238,13 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
   const handlePlayPause = () => {
     if (wavesurferRef.current) {
       wavesurferRef.current.playPause();
+    }
+  };
+
+  const handleZoomChange = (newZoom: number) => {
+    setZoomLevel(newZoom);
+    if (wavesurferRef.current) {
+      wavesurferRef.current.zoom(newZoom);
     }
   };
 
@@ -411,7 +423,14 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       <div className="mb-6">
         <div
           ref={containerRef}
-          className="bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden"
+          className="bg-gray-50 dark:bg-gray-900 rounded-lg p-1"
+          style={{ 
+            height: '258px', // Fixed height: 250px waveform + 8px padding (4px top + 4px bottom)
+            minHeight: '258px',
+            maxHeight: '258px',
+            overflowX: 'auto', // Allow horizontal scroll when zoomed
+            overflowY: 'hidden' // Prevent vertical scroll
+          }}
         />
         {isLoading && (
           <div className="flex items-center justify-center py-16">
@@ -486,6 +505,57 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
               style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
             />
           </div>
+        </div>
+
+        {/* Zoom Controls */}
+        <div className="flex items-center gap-3 pt-2">
+          <div className="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                 className="w-5 h-5 text-gray-600 dark:text-gray-400">
+              <path d="M8.25 10.875a2.625 2.625 0 115.25 0 2.625 2.625 0 01-5.25 0z" />
+              <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm-1.125 4.5a4.125 4.125 0 102.338 7.524l2.007 2.006a.75.75 0 101.06-1.06l-2.006-2.007a4.125 4.125 0 00-3.399-6.463z" clipRule="evenodd" />
+            </svg>
+            <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 w-12">
+              Zoom
+            </span>
+          </div>
+          <button
+            onClick={() => handleZoomChange(Math.max(0, zoomLevel - 50))}
+            disabled={zoomLevel === 0}
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                     disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
+                     transition-colors duration-200"
+            title="Zoom out"
+          >
+            −
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="500"
+            step="10"
+            value={zoomLevel}
+            onChange={(e) => handleZoomChange(parseInt(e.target.value))}
+            className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600
+              [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:hover:bg-blue-700
+              [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full 
+              [&::-moz-range-thumb]:bg-blue-600 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
+          />
+          <button
+            onClick={() => handleZoomChange(Math.min(500, zoomLevel + 50))}
+            disabled={zoomLevel >= 500}
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                     disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
+                     transition-colors duration-200"
+            title="Zoom in"
+          >
+            +
+          </button>
+          <span className="text-xs font-mono text-gray-600 dark:text-gray-400 w-12 text-right">
+            {zoomLevel === 0 ? "Fit" : `${zoomLevel}px`}
+          </span>
         </div>
 
         {/* Set A/B Buttons (Always visible when audio loaded) */}
