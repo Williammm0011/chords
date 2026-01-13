@@ -4,6 +4,55 @@ import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 
+/**
+ * CHORD CLIP LOOPER - User Guide
+ * ==============================
+ * 
+ * BASIC PLAYBACK:
+ * - Click waveform to seek to any position
+ * - Press Space or click play button to play/pause
+ * - Time display shows current time / total duration
+ * 
+ * CREATING A LOOP REGION (3 methods):
+ * 1. DRAG METHOD: Click and drag on waveform to select region
+ * 2. SET A/B METHOD (Recommended for practice):
+ *    - Play audio and press "Set A" when you reach the start point
+ *    - Continue playing and press "Set B" when you reach the end point
+ * 3. CLICK METHOD: Click edges of existing region and drag to adjust
+ * 
+ * FINE-TUNING YOUR REGION:
+ * - Use nudge buttons to adjust start/end precisely:
+ *   • ±0.05s for fine adjustments (frame-accurate)
+ *   • ±0.5s for quick adjustments
+ * - All adjustments are clamped within track boundaries [0, duration]
+ * - Minimum region length: 0.1 seconds
+ * 
+ * LOOPING:
+ * - Click "Loop ON" button to enable seamless looping
+ * - Audio will restart at region start when reaching region end
+ * - No gaps or clicks - perfect for practice
+ * - Toggle off anytime to play normally
+ * 
+ * KEYBOARD SHORTCUTS:
+ * - Space: Play/Pause (works anytime)
+ * - L: Toggle loop ON/OFF (only when region exists)
+ * - Esc: Clear region and disable loop
+ * 
+ * PRACTICE WORKFLOW EXAMPLE:
+ * 1. Load your YouTube video
+ * 2. Play through and press "Set A" at difficult section start
+ * 3. Continue and press "Set B" at section end
+ * 4. Fine-tune with ±0.05s buttons if needed
+ * 5. Click "Loop ON" and press Space to practice
+ * 6. Adjust region on-the-fly while looping
+ * 
+ * TIPS:
+ * - Shorter loops (2-5 seconds) work best for practice
+ * - Use ±0.05s buttons for catching exact beat/note start
+ * - Press L to quickly toggle loop without mouse
+ * - Region timestamps show exact timing for reference
+ */
+
 interface WavePlayerProps {
   audioUrl: string;
 }
@@ -198,6 +247,86 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
     }
   };
 
+  // Set region start (A) to current playhead time
+  const handleSetA = () => {
+    if (!wavesurferRef.current || !regionsPluginRef.current) return;
+    
+    const currentTime = wavesurferRef.current.getCurrentTime();
+    const clampedTime = Math.max(0, Math.min(currentTime, duration));
+    
+    if (currentRegion) {
+      // Update existing region's start
+      const regions = regionsPluginRef.current.getRegions();
+      const region = regions.find((r: any) => r.id === currentRegion.id);
+      if (region) {
+        region.setOptions({
+          start: clampedTime,
+          end: Math.max(clampedTime + 0.1, currentRegion.end), // Ensure end > start
+        });
+      }
+    } else {
+      // Create new region from current time to end
+      regionsPluginRef.current.addRegion({
+        start: clampedTime,
+        end: Math.min(clampedTime + 5, duration), // Default 5s region
+        color: "rgba(99, 102, 241, 0.3)",
+      });
+    }
+  };
+
+  // Set region end (B) to current playhead time
+  const handleSetB = () => {
+    if (!wavesurferRef.current || !regionsPluginRef.current) return;
+    
+    const currentTime = wavesurferRef.current.getCurrentTime();
+    const clampedTime = Math.max(0, Math.min(currentTime, duration));
+    
+    if (currentRegion) {
+      // Update existing region's end
+      const regions = regionsPluginRef.current.getRegions();
+      const region = regions.find((r: any) => r.id === currentRegion.id);
+      if (region) {
+        region.setOptions({
+          start: Math.min(currentRegion.start, clampedTime - 0.1), // Ensure start < end
+          end: clampedTime,
+        });
+      }
+    } else {
+      // Create new region from start to current time
+      regionsPluginRef.current.addRegion({
+        start: Math.max(0, clampedTime - 5), // Default 5s region
+        end: clampedTime,
+        color: "rgba(99, 102, 241, 0.3)",
+      });
+    }
+  };
+
+  // Nudge region start by delta seconds
+  const handleNudgeStart = (delta: number) => {
+    if (!currentRegion || !regionsPluginRef.current) return;
+    
+    const newStart = Math.max(0, Math.min(currentRegion.start + delta, currentRegion.end - 0.1));
+    
+    const regions = regionsPluginRef.current.getRegions();
+    const region = regions.find((r: any) => r.id === currentRegion.id);
+    if (region) {
+      region.setOptions({ start: newStart });
+    }
+  };
+
+  // Nudge region end by delta seconds
+  const handleNudgeEnd = (delta: number) => {
+    if (!currentRegion || !regionsPluginRef.current) return;
+    
+    const newEnd = Math.max(currentRegion.start + 0.1, Math.min(currentRegion.end + delta, duration));
+    
+    const regions = regionsPluginRef.current.getRegions();
+    const region = regions.find((r: any) => r.id === currentRegion.id);
+    if (region) {
+      region.setOptions({ end: newEnd });
+    }
+  };
+
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -357,6 +486,32 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           </div>
         </div>
 
+        {/* Set A/B Buttons (Always visible when audio loaded) */}
+        <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <button
+            onClick={handleSetA}
+            disabled={isLoading || !!error}
+            className="flex-1 py-2 px-4 rounded-lg font-semibold text-sm
+              bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400
+              text-white transition-all duration-200
+              disabled:cursor-not-allowed"
+            title="Set region start to current playhead position"
+          >
+            Set A (Start)
+          </button>
+          <button
+            onClick={handleSetB}
+            disabled={isLoading || !!error}
+            className="flex-1 py-2 px-4 rounded-lg font-semibold text-sm
+              bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400
+              text-white transition-all duration-200
+              disabled:cursor-not-allowed"
+            title="Set region end to current playhead position"
+          >
+            Set B (End)
+          </button>
+        </div>
+
         {/* Region Controls */}
         {currentRegion && (
           <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -384,6 +539,91 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
                 <span className="ml-2 font-mono text-gray-900 dark:text-gray-100">
                   {formatTime(currentRegion.end - currentRegion.start)}
                 </span>
+              </div>
+            </div>
+
+            {/* Fine-tune Controls */}
+            <div className="space-y-3">
+              {/* Start Nudge Controls */}
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
+                  Adjust Start
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleNudgeStart(-0.5)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move start earlier by 0.5 seconds"
+                  >
+                    -0.5s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeStart(-0.05)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move start earlier by 0.05 seconds"
+                  >
+                    -0.05s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeStart(0.05)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move start later by 0.05 seconds"
+                  >
+                    +0.05s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeStart(0.5)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move start later by 0.5 seconds"
+                  >
+                    +0.5s
+                  </button>
+                </div>
+              </div>
+
+              {/* End Nudge Controls */}
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
+                  Adjust End
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleNudgeEnd(-0.5)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move end earlier by 0.5 seconds"
+                  >
+                    -0.5s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeEnd(-0.05)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move end earlier by 0.05 seconds"
+                  >
+                    -0.05s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeEnd(0.05)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move end later by 0.05 seconds"
+                  >
+                    +0.05s
+                  </button>
+                  <button
+                    onClick={() => handleNudgeEnd(0.5)}
+                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
+                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
+                    title="Move end later by 0.5 seconds"
+                  >
+                    +0.5s
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -423,12 +663,19 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
         )}
 
         {/* Instructions */}
-        <p className="text-sm text-center text-gray-500 dark:text-gray-400 mt-4">
-          {!currentRegion 
-            ? "Drag on the waveform to create a loop region" 
-            : "Adjust region by dragging edges • Space: play/pause • L: toggle loop • Esc: clear"
-          }
-        </p>
+        <div className="text-xs text-center text-gray-500 dark:text-gray-400 mt-4 space-y-1">
+          {!currentRegion ? (
+            <>
+              <p className="font-semibold">Create a loop region:</p>
+              <p>Drag on waveform OR use Set A/B buttons while playing</p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Practice mode active</p>
+              <p>Fine-tune with nudge buttons • Space: play/pause • L: toggle loop • Esc: clear</p>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
