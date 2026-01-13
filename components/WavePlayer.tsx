@@ -109,6 +109,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       waveColor: "#9333ea",
       progressColor: "#6366f1",
       cursorColor: "#3b82f6",
+      cursorWidth: 2, // Thin playhead line
       barWidth: 2,
       barGap: 1,
       barRadius: 3,
@@ -162,6 +163,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
     // Event listeners
     wavesurfer.on("ready", () => {
       if (!isMounted) return;
+      
       setDuration(wavesurfer.getDuration());
       setIsLoading(false);
     });
@@ -476,7 +478,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           <span className="font-mono">{formatTime(duration)}</span>
         </div>
 
-        {/* Progress Bar */}
+        {/* Progress Bar (Timeline) */}
         <div className="relative">
           <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
             <div

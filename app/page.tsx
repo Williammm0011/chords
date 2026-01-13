@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { z } from "zod";
-import { youtubeUrlSchema, type DownloadResponse } from "@/lib/validation";
+import { youtubeUrlSchema } from "@/lib/validation";
 import WavePlayer from "@/components/WavePlayer";
 
 export default function Home() {
@@ -12,8 +12,6 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isValid, setIsValid] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [downloadStatus, setDownloadStatus] = useState("");
 
   // Validate URL on change
   useEffect(() => {
@@ -35,68 +33,16 @@ export default function Home() {
     }
   }, [youtubeUrl]);
 
-  const pollProgress = async (jobId: string) => {
-    const maxAttempts = 120; // 2 minutes max (120 * 1 second)
-    let attempts = 0;
-
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/download/progress?jobId=${jobId}`);
-        const data = await response.json();
-
-        if (!response.ok) {
-          setError(data.error || "Failed to check progress");
-          setLoading(false);
-          return;
-        }
-
-        setDownloadProgress(data.progress || 0);
-        setDownloadStatus(data.status);
-
-        if (data.status === "completed" && data.audioUrl) {
-          setAudioUrl(data.audioUrl);
-          setLoading(false);
-          setDownloadProgress(100);
-          setDownloadStatus("Download complete!");
-          return;
-        }
-
-        if (data.status === "error") {
-          setError(data.error || "Download failed");
-          setLoading(false);
-          return;
-        }
-
-        // Continue polling if still downloading
-        attempts++;
-        if (attempts < maxAttempts && (data.status === "queued" || data.status === "downloading")) {
-          setTimeout(poll, 1000); // Poll every second
-        } else if (attempts >= maxAttempts) {
-          setError("Download timeout - please try again");
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("Progress poll error:", err);
-        setError("Failed to check download progress");
-        setLoading(false);
-      }
-    };
-
-    poll();
-  };
-
   const handleFetchAudio = async () => {
     setError("");
     setLoading(true);
-    setDownloadProgress(0);
-    setDownloadStatus("Starting download...");
     setAudioUrl(null);
 
     try {
       // Validate URL (redundant but safe)
       youtubeUrlSchema.parse(youtubeUrl);
 
-      // Call API to start download
+      // Call API to download
       const response = await fetch("/api/download", {
         method: "POST",
         headers: {
@@ -105,22 +51,25 @@ export default function Home() {
         body: JSON.stringify({ url: youtubeUrl }),
       });
 
-      const data: DownloadResponse = await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
-        setError(data.error || "Failed to fetch audio");
+        const errorMsg = data.details || data.error || "Failed to fetch audio";
+        setError(errorMsg);
         setLoading(false);
         return;
       }
 
       console.log("API Response:", data);
 
-      // Start polling for progress
-      if (data.jobId) {
-        pollProgress(data.jobId);
+      // Set audio URL if ready
+      if (data.status === "ready" && data.audioUrl) {
+        setAudioUrl(data.audioUrl);
+        if (data.cached) {
+          console.log("✓ Loaded from cache");
+        }
       } else {
-        setError("No job ID received");
-        setLoading(false);
+        setError("Unexpected response format");
       }
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -128,6 +77,7 @@ export default function Home() {
       } else {
         setError("An error occurred while fetching audio");
       }
+    } finally {
       setLoading(false);
     }
   };
@@ -177,29 +127,33 @@ export default function Home() {
               </div>
 
               {error && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 
-                              text-red-700 dark:text-red-300 px-4 py-3 rounded-lg">
-                  {error}
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <div className="flex items-start gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" 
+                         className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-semibold text-red-900 dark:text-red-200">
+                        Error
+                      </p>
+                      <p className="text-sm text-red-700 dark:text-red-300 mt-1">
+                        {error}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 
-              {/* Progress Bar */}
               {loading && (
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">
-                      {downloadStatus}
-                    </span>
-                    <span className="text-gray-600 dark:text-gray-400 font-mono">
-                      {downloadProgress}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-300 ease-out rounded-full"
-                      style={{ width: `${downloadProgress}%` }}
-                    />
-                  </div>
+                <div className="flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <svg className="animate-spin h-5 w-5 text-blue-600 dark:text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span className="text-sm text-blue-700 dark:text-blue-300">
+                    Downloading and converting audio... This may take up to 2 minutes.
+                  </span>
                 </div>
               )}
 
