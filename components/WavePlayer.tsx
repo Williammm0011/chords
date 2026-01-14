@@ -120,6 +120,8 @@ export default function WavePlayer({
   const [offset, setOffset] = useState(initialOffset ?? 0); // Offset in seconds to align with music
   const [metronomeActive, setMetronomeActive] = useState(false); // Metronome playing state
   const [metronomeWasActive, setMetronomeWasActive] = useState(false); // Track if metronome was playing before BPM became invalid
+  const [metronomeVolume, setMetronomeVolume] = useState(0.3); // Metronome volume (0–1)
+  const metronomeVolumeRef = useRef(0.3); // Ref to always have latest volume value
   const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
   const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
   
@@ -488,7 +490,9 @@ export default function WavePlayer({
     gainNode.connect(ctx.destination);
     
     oscillator.frequency.value = 1000; // 1kHz click
-    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    // Clamp volume between 0 and 2 (2x louder than before), use ref to get latest value
+    const clampedVolume = Math.max(0, Math.min(2, metronomeVolumeRef.current));
+    gainNode.gain.setValueAtTime(clampedVolume, ctx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
     
     oscillator.start(ctx.currentTime);
@@ -524,6 +528,11 @@ export default function WavePlayer({
       }
     }
   };
+
+  // Sync metronome volume ref with state
+  useEffect(() => {
+    metronomeVolumeRef.current = metronomeVolume;
+  }, [metronomeVolume]);
 
   // Cleanup metronome on unmount
   useEffect(() => {
@@ -942,6 +951,31 @@ export default function WavePlayer({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 3L4 21h16L12 3z M12 3v10" />
               </svg>
             </button>
+            {/* Metronome volume slider */}
+            <div className="flex items-center ml-2">
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.05}
+                value={metronomeVolume}
+                onChange={(e) => setMetronomeVolume(parseFloat(e.target.value))}
+                className="w-20 h-0.5 bg-gray-300 dark:bg-gray-600 rounded-full appearance-none cursor-pointer
+                         [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 
+                         [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500 
+                         [&::-webkit-slider-thumb]:dark:bg-blue-400 [&::-webkit-slider-thumb]:cursor-pointer
+                         [&::-webkit-slider-thumb]:shadow-none [&::-webkit-slider-thumb]:transition-all
+                         [&::-webkit-slider-thumb]:hover:bg-blue-600 [&::-webkit-slider-thumb]:dark:hover:bg-blue-300
+                         [&::-moz-range-thumb]:w-2.5 [&::-moz-range-thumb]:h-2.5 [&::-moz-range-thumb]:rounded-full 
+                         [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:dark:bg-blue-400 
+                         [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer
+                         [&::-moz-range-thumb]:shadow-none [&::-moz-range-thumb]:transition-colors
+                         [&::-moz-range-thumb]:hover:bg-blue-600 [&::-moz-range-thumb]:dark:hover:bg-blue-300
+                         [&::-moz-range-track]:bg-gray-300 [&::-moz-range-track]:dark:bg-gray-600 
+                         [&::-moz-range-track]:rounded-full [&::-moz-range-track]:h-0.5"
+                title="Metronome volume"
+              />
+            </div>
           </div>
           
           <div className="flex items-center gap-2">
@@ -1001,10 +1035,6 @@ export default function WavePlayer({
             >
               Use playhead
             </button>
-          </div>
-          
-          <div className="text-xs text-gray-500 dark:text-gray-400 ml-auto">
-            Bar length: {getBarWidth().toFixed(2)}s
           </div>
         </div>
       )}
