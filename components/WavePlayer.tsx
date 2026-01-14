@@ -66,6 +66,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
   const loopIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -75,6 +76,8 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = default fit, higher = more zoomed
   const [internalShowHelp, setInternalShowHelp] = useState(false);
+  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
+  const [dragProgressPercent, setDragProgressPercent] = useState(0);
   
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
@@ -347,6 +350,9 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   };
 
   const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Don't handle click if we're dragging
+    if (isDraggingProgress) return;
+    
     if (!wavesurferRef.current || !duration) return;
     
     const rect = e.currentTarget.getBoundingClientRect();
@@ -355,6 +361,18 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
     const newTime = percentage * duration;
     
     wavesurferRef.current.setTime(newTime);
+  };
+
+  const handleProgressBarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!progressBarRef.current || !duration) return;
+    
+    setIsDraggingProgress(true);
+    
+    // Calculate initial position
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const percentage = (x / rect.width) * 100;
+    setDragProgressPercent(percentage);
   };
 
   const formatTime = (seconds: number): string => {
@@ -457,6 +475,40 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [isPlaying]);
+
+  // Handle progress bar dragging
+  useEffect(() => {
+    if (!isDraggingProgress) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!progressBarRef.current) return;
+      
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+      const percentage = (x / rect.width) * 100;
+      setDragProgressPercent(percentage);
+    };
+
+    const handleMouseUp = () => {
+      if (!wavesurferRef.current || !duration) {
+        setIsDraggingProgress(false);
+        return;
+      }
+      
+      // Seek to the dragged position
+      const newTime = (dragProgressPercent / 100) * duration;
+      wavesurferRef.current.setTime(newTime);
+      setIsDraggingProgress(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingProgress, dragProgressPercent, duration]);
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 relative">
@@ -615,23 +667,38 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
 
         {/* Progress Bar (Timeline) - Draggable */}
         <div 
-          className="relative cursor-pointer group"
+          ref={progressBarRef}
+          className={`relative group ${isDraggingProgress ? 'cursor-grabbing' : 'cursor-pointer'}`}
           onClick={handleProgressBarClick}
-          title="Click to seek"
+          onMouseDown={handleProgressBarMouseDown}
+          title="Click or drag to seek"
         >
           <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden hover:h-4 transition-all duration-150">
             {/* Progress fill - no transition to avoid visual lag during region loops */}
             <div
               className="h-full bg-gradient-to-r from-blue-600 to-purple-600"
-              style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              style={{ 
+                width: `${
+                  isDraggingProgress 
+                    ? dragProgressPercent 
+                    : duration > 0 ? (currentTime / duration) * 100 : 0
+                }%` 
+              }}
             />
           </div>
           {/* Playhead indicator */}
           <div 
-            className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white dark:bg-gray-200 rounded-full shadow-lg 
-                     border-2 border-blue-600 opacity-0 group-hover:opacity-100 transition-opacity duration-150
-                     pointer-events-none"
-            style={{ left: `calc(${duration > 0 ? (currentTime / duration) * 100 : 0}% - 8px)` }}
+            className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white dark:bg-gray-200 rounded-full shadow-lg 
+                     border-2 border-blue-600 pointer-events-none
+                     ${isDraggingProgress ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} 
+                     transition-opacity duration-150`}
+            style={{ 
+              left: `calc(${
+                isDraggingProgress 
+                  ? dragProgressPercent 
+                  : duration > 0 ? (currentTime / duration) * 100 : 0
+              }% - 8px)` 
+            }}
           />
         </div>
 
