@@ -32,18 +32,27 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
  * - Esc: Clear region selection
  * - ? / H: Show keyboard shortcuts help
  * 
+ * CHORD NOTATION:
+ * - Set BPM (beats per minute) to match the song tempo
+ * - Set time signature (default 4 for 4/4 time)
+ * - Adjust Offset (in seconds) to align bars with the music
+ * - Click on any bar in the note track to add chord names
+ * - Press Enter or Esc to finish editing a note
+ * - Notes are automatically positioned at each bar line
+ * 
  * PRACTICE WORKFLOW:
  * 1. Load your YouTube video
- * 2. Click and drag on the waveform to select a difficult section
- * 3. The audio will automatically loop that section
- * 4. Use "Replay" to restart from the beginning of the region
- * 5. Use ← / → to fine-tune your position
- * 6. Adjust region by dragging its edges
- * 7. Press Esc to clear and select a new region
+ * 2. Set BPM and time signature to match the song
+ * 3. Adjust offset so bar lines align with the music
+ * 4. Add chord names in the note track
+ * 5. Click and drag on the waveform to select a section to practice
+ * 6. The audio will automatically loop that section
+ * 7. Use "Replay" to restart from the beginning of the region
+ * 8. Press Esc to clear and select a new region
  * 
  * TIPS:
  * - Shorter loops (2-5 seconds) work best for practice
- * - Zoom in for precise region selection
+ * - Zoom in for precise region selection and chord placement
  * - Use skip buttons for quick navigation
  * - The looping is seamless with no gaps
  * - Press ? or H to see all keyboard shortcuts
@@ -85,6 +94,9 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [notes, setNotes] = useState<Record<number, string>>({}); // Notes by timestamp (seconds)
   const [autoScroll, setAutoScroll] = useState(true); // Enable/disable autoscroll
   const [isTypingNote, setIsTypingNote] = useState(false); // Track if user is typing
+  const [bpm, setBpm] = useState(120); // Beats per minute
+  const [beatsPerBar, setBeatsPerBar] = useState(4); // Time signature / beats per bar
+  const [offset, setOffset] = useState(0); // Offset in seconds to align with music
   
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
@@ -400,14 +412,53 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
     }));
   };
 
-  // Generate note timestamps every 5 seconds
+  // Generate note timestamps for each bar based on BPM and time signature
   const getNoteTimestamps = (): number[] => {
-    if (!duration) return [];
+    if (!duration || bpm <= 0 || beatsPerBar <= 0) return [];
+    
+    const secondsPerBeat = 60 / bpm;
+    const secondsPerBar = secondsPerBeat * beatsPerBar;
+    
     const timestamps: number[] = [];
-    for (let t = 0; t <= Math.floor(duration); t += 5) {
-      timestamps.push(t);
+    let barTime = offset;
+    
+    // Generate timestamps for each bar
+    while (barTime <= duration) {
+      if (barTime >= 0) {
+        // Round to 3 decimal places to avoid floating point precision issues
+        timestamps.push(Math.round(barTime * 1000) / 1000);
+      }
+      barTime += secondsPerBar;
     }
+    
     return timestamps;
+  };
+  
+  // Get bar width in seconds
+  const getBarWidth = (): number => {
+    if (bpm <= 0 || beatsPerBar <= 0) return 1;
+    const secondsPerBeat = 60 / bpm;
+    return secondsPerBeat * beatsPerBar;
+  };
+  
+  // Get the currently playing bar timestamp
+  const getCurrentBarTimestamp = (): number | null => {
+    if (!duration || bpm <= 0 || beatsPerBar <= 0) return null;
+    
+    const barWidth = getBarWidth();
+    const timestamps = getNoteTimestamps();
+    
+    // Find which bar the current time falls into
+    for (let i = 0; i < timestamps.length; i++) {
+      const barStart = timestamps[i];
+      const barEnd = barStart + barWidth;
+      
+      if (currentTime >= barStart && currentTime < barEnd) {
+        return barStart;
+      }
+    }
+    
+    return null;
   };
 
   // Loop monitoring effect
@@ -681,6 +732,69 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
         )}
       </div>
 
+      {/* Music Timing Controls */}
+      {duration > 0 && !isLoading && !error && (
+        <div className="mb-4 flex items-center gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <label htmlFor="bpm" className="text-gray-700 dark:text-gray-300 font-medium">
+              BPM:
+            </label>
+            <input
+              id="bpm"
+              type="number"
+              min="1"
+              max="300"
+              value={bpm}
+              onChange={(e) => setBpm(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-16 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
+                       bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <label htmlFor="beatsPerBar" className="text-gray-700 dark:text-gray-300 font-medium flex items-center" title="Time Signature (拍號)">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                <path fillRule="evenodd" d="M19.952 1.651a.75.75 0 01.298.599V16.303a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V6.994l-9 2.572v9.737a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V3.893a.75.75 0 01.576-.73l11.25-2.662a.75.75 0 01.625.15z" clipRule="evenodd" />
+              </svg>
+            </label>
+            <input
+              id="beatsPerBar"
+              type="number"
+              min="1"
+              max="16"
+              value={beatsPerBar}
+              onChange={(e) => setBeatsPerBar(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-12 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
+                       bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <span className="text-gray-500 dark:text-gray-400">/4</span>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <label htmlFor="offset" className="text-gray-700 dark:text-gray-300 font-medium">
+              Offset:
+            </label>
+            <input
+              id="offset"
+              type="number"
+              step="0.1"
+              value={offset}
+              onChange={(e) => setOffset(parseFloat(e.target.value) || 0)}
+              className="w-20 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
+                       bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <span className="text-gray-500 dark:text-gray-400">sec</span>
+          </div>
+          
+          <div className="text-xs text-gray-500 dark:text-gray-400 ml-auto">
+            Bar length: {getBarWidth().toFixed(2)}s
+          </div>
+        </div>
+      )}
+
       {/* Horizontal Note Track */}
       {duration > 0 && !isLoading && !error && (
         <div className="mb-6">
@@ -720,26 +834,60 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
                 minWidth: '100%'
               }}
             >
-              {/* Background grid lines every 5 seconds */}
-              {getNoteTimestamps().map(timestamp => (
-                <div
-                  key={`grid-${timestamp}`}
-                  className="absolute top-0 bottom-0 w-px bg-gray-300 dark:bg-gray-700"
-                  style={{
-                    left: zoomLevel > 0 
-                      ? `${(timestamp / duration) * duration * zoomLevel}px`
-                      : `${(timestamp / duration) * 100}%`
-                  }}
-                >
-                  <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-1 ml-1">
-                    {formatTime(timestamp)}
+              {/* Current bar background highlight */}
+              {getNoteTimestamps().map(timestamp => {
+                const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                const barWidth = getBarWidth();
+                if (!isCurrentBar) return null;
+                
+                return (
+                  <div
+                    key={`highlight-${timestamp}`}
+                    className="absolute top-0 bottom-0 bg-blue-100/30 dark:bg-blue-900/20 pointer-events-none transition-all duration-200"
+                    style={{
+                      left: zoomLevel > 0 
+                        ? `${(timestamp / duration) * duration * zoomLevel}px`
+                        : `${(timestamp / duration) * 100}%`,
+                      width: zoomLevel > 0 
+                        ? `${barWidth * zoomLevel}px`
+                        : `${(barWidth / duration) * 100}%`
+                    }}
+                  />
+                );
+              })}
+              
+              {/* Background grid lines for each bar */}
+              {getNoteTimestamps().map(timestamp => {
+                const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                return (
+                  <div
+                    key={`grid-${timestamp}`}
+                    className={`absolute top-0 bottom-0 transition-all duration-200 ${
+                      isCurrentBar 
+                        ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
+                        : 'w-px bg-gray-300 dark:bg-gray-700'
+                    }`}
+                    style={{
+                      left: zoomLevel > 0 
+                        ? `${(timestamp / duration) * duration * zoomLevel}px`
+                        : `${(timestamp / duration) * 100}%`
+                    }}
+                  >
+                    <div className={`text-xs font-mono mt-1 ml-1 ${
+                      isCurrentBar 
+                        ? 'text-blue-600 dark:text-blue-300 font-semibold' 
+                        : 'text-gray-500 dark:text-gray-400'
+                    }`}>
+                      {formatTime(timestamp)}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
-              {/* Note inputs at each 5-second mark */}
+              {/* Note inputs at each bar */}
               {getNoteTimestamps().map(timestamp => {
                 const hasContent = notes[timestamp]?.trim().length > 0;
+                const barWidth = getBarWidth();
                 
                 return (
                   <div
@@ -750,8 +898,8 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
                         ? `${(timestamp / duration) * duration * zoomLevel}px`
                         : `${(timestamp / duration) * 100}%`,
                       width: zoomLevel > 0 
-                        ? `${5 * zoomLevel}px` // 5 seconds width
-                        : `${(5 / duration) * 100}%`,
+                        ? `${barWidth * zoomLevel}px` // Bar width in pixels
+                        : `${(barWidth / duration) * 100}%`,
                       minWidth: '60px'
                     }}
                   >
@@ -1107,6 +1255,33 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
                 </div>
               </div>
 
+              {/* Music Timing Section */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-pink-600">
+                    <path fillRule="evenodd" d="M19.952 1.651a.75.75 0 01.298.599V16.303a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V6.994l-9 2.572v9.737a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V3.893a.75.75 0 01.576-.73l11.25-2.662a.75.75 0 01.625.15z" clipRule="evenodd" />
+                  </svg>
+                  Chord Notation
+                </h4>
+                <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                  <p className="py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <strong>BPM:</strong> Set beats per minute to match song tempo
+                  </p>
+                  <p className="py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 text-pink-600 flex-shrink-0">
+                      <path fillRule="evenodd" d="M19.952 1.651a.75.75 0 01.298.599V16.303a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V6.994l-9 2.572v9.737a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V3.893a.75.75 0 01.576-.73l11.25-2.662a.75.75 0 01.625.15z" clipRule="evenodd" />
+                    </svg>
+                    <span><strong>Time Signature:</strong> Set beats per bar (default 4 for 4/4 time)</span>
+                  </p>
+                  <p className="py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <strong>Offset:</strong> Adjust timing (in seconds) to align bars with music
+                  </p>
+                  <p className="py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    Click on any bar in the note track to add chord names. Press <kbd className="px-2 py-0.5 bg-white dark:bg-gray-600 rounded text-xs font-mono">Enter</kbd> or <kbd className="px-2 py-0.5 bg-white dark:bg-gray-600 rounded text-xs font-mono">Esc</kbd> to finish editing.
+                  </p>
+                </div>
+              </div>
+
               {/* Help Section */}
               <div>
                 <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
@@ -1135,11 +1310,12 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                 <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">💡 Tips</h4>
                 <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
+                  <li>Set BPM and offset first to align bars with the music</li>
                   <li>Drag on the waveform to create a loop region</li>
                   <li>Click and drag region edges to adjust boundaries</li>
                   <li>Click anywhere on the progress bar to seek</li>
-                  <li>Zoom grows exponentially: 5px → 7px → 9px → 12px → 15px...</li>
-                  <li>Higher zoom = more detail for precise region selection</li>
+                  <li>Zoom grows exponentially for more detail</li>
+                  <li>Higher zoom = more precision for region selection and chord placement</li>
                 </ul>
               </div>
             </div>
