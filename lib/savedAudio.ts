@@ -9,6 +9,9 @@ export interface SavedAudioItem {
   audioUrl: string;
   title: string;
   notes: string;
+  bpm?: number | null;
+  offset?: number | null;
+  noteTrack?: Record<number, string>;
   dateAdded: string; // ISO string
   lastAccessed: string; // ISO string
 }

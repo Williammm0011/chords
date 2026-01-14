@@ -64,6 +64,12 @@ interface WavePlayerProps {
   onHelpClose?: () => void;
   zoomLevel?: number;
   onZoomChange?: (level: number) => void;
+  initialBpm?: number | null;
+  onBpmChange?: (bpm: number | null) => void;
+  initialOffset?: number | null;
+  onOffsetChange?: (offset: number | null) => void;
+  initialNotes?: Record<number, string>;
+  onNotesChange?: (notes: Record<number, string>) => void;
 }
 
 interface Region {
@@ -72,7 +78,19 @@ interface Region {
   end: number;
 }
 
-export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHelpClose, zoomLevel: externalZoomLevel, onZoomChange }: WavePlayerProps) {
+export default function WavePlayer({
+  audioUrl,
+  showHelp: externalShowHelp,
+  onHelpClose,
+  zoomLevel: externalZoomLevel,
+  onZoomChange,
+  initialBpm,
+  onBpmChange,
+  initialOffset,
+  onOffsetChange,
+  initialNotes,
+  onNotesChange,
+}: WavePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
@@ -94,17 +112,35 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [internalShowHelp, setInternalShowHelp] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [dragProgressPercent, setDragProgressPercent] = useState(0);
-  const [notes, setNotes] = useState<Record<number, string>>({}); // Notes by timestamp (seconds)
+  const [notes, setNotes] = useState<Record<number, string>>(initialNotes ?? {}); // Notes by timestamp (seconds)
   const [autoScroll, setAutoScroll] = useState(true); // Enable/disable autoscroll
   const [isTypingNote, setIsTypingNote] = useState(false); // Track if user is typing
-  const [bpm, setBpm] = useState(120); // Beats per minute
+  const [bpm, setBpm] = useState(initialBpm ?? 120); // Beats per minute
   const [beatsPerBar, setBeatsPerBar] = useState(4); // Time signature / beats per bar
-  const [offset, setOffset] = useState(0); // Offset in seconds to align with music
+  const [offset, setOffset] = useState(initialOffset ?? 0); // Offset in seconds to align with music
   const [metronomeActive, setMetronomeActive] = useState(false); // Metronome playing state
   const [metronomeWasActive, setMetronomeWasActive] = useState(false); // Track if metronome was playing before BPM became invalid
   const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
   const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
   
+  // Sync BPM/offset/notes from parent when loading a saved item
+  useEffect(() => {
+    if (initialBpm != null) {
+      setBpm(initialBpm);
+    }
+  }, [initialBpm]);
+  
+  useEffect(() => {
+    if (initialOffset != null) {
+      setOffset(initialOffset);
+    }
+  }, [initialOffset]);
+  
+  useEffect(() => {
+    if (initialNotes) {
+      setNotes(initialNotes);
+    }
+  }, [initialNotes]);
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
   const handleHelpClose = () => {
@@ -417,10 +453,25 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   };
 
   const handleNoteChange = (timestamp: number, value: string) => {
-    setNotes(prev => ({
-      ...prev,
-      [timestamp]: value
-    }));
+    setNotes(prev => {
+      const updated = {
+        ...prev,
+        [timestamp]: value,
+      };
+      if (onNotesChange) {
+        onNotesChange(updated);
+      }
+      return updated;
+    });
+  };
+
+  const handleSetOffsetFromCursor = () => {
+    if (!wavesurferRef.current) return;
+    const current = wavesurferRef.current.getCurrentTime();
+    // Snap to nearest 0.1s
+    const snapped = Math.round(current * 10) / 10;
+    setOffset(snapped);
+    if (onOffsetChange) onOffsetChange(snapped);
   };
 
   // Play a metronome click sound
@@ -810,7 +861,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
             height: '258px', // Fixed height: 250px waveform + 8px padding (4px top + 4px bottom)
             minHeight: '258px',
             maxHeight: '258px',
-            overflowX: 'auto', // Allow horizontal scroll when zoomed
+            overflowX: 'hidden', // Hide horizontal scrollbar
             overflowY: 'hidden' // Prevent vertical scroll
           }}
           onScroll={(e) => {
@@ -860,7 +911,17 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               min="1"
               max="300"
               value={bpm || ''}
-              onChange={(e) => setBpm(parseInt(e.target.value) || 0)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const next = parseInt(raw);
+                if (Number.isNaN(next)) {
+                  setBpm(0);
+                  if (onBpmChange) onBpmChange(null);
+                } else {
+                  setBpm(next);
+                  if (onBpmChange) onBpmChange(next);
+                }
+              }}
               className="w-16 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
                        bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
                        focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -912,12 +973,34 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               type="number"
               step="0.1"
               value={offset}
-              onChange={(e) => setOffset(parseFloat(e.target.value) || 0)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const next = parseFloat(raw);
+                if (Number.isNaN(next)) {
+                  // Treat empty/invalid as "no saved offset" but don't block 0
+                  setOffset(0);
+                  if (onOffsetChange) onOffsetChange(null);
+                } else {
+                  // Snap to nearest 0.1s
+                  const snapped = Math.round(next * 10) / 10;
+                  setOffset(snapped);
+                  if (onOffsetChange) onOffsetChange(snapped);
+                }
+              }}
               className="w-20 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
                        bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
                        focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-            <span className="text-gray-500 dark:text-gray-400">sec</span>
+            <span className="text-gray-500 dark:text-gray-400 mr-2">sec</span>
+            <button
+              type="button"
+              onClick={handleSetOffsetFromCursor}
+              className="px-2 py-1 text-xs rounded border border-gray-300 dark:border-gray-600
+                       text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800
+                       hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Use playhead
+            </button>
           </div>
           
           <div className="text-xs text-gray-500 dark:text-gray-400 ml-auto">
@@ -967,7 +1050,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
             >
               {/* Playhead indicator for offset adjustment */}
               <div
-                className="absolute top-0 w-0.5 h-2 bg-red-500 dark:bg-red-400 z-20 pointer-events-none"
+                className="absolute top-0 w-0.5 h-2 bg-blue-500 dark:bg-blue-400 z-20 pointer-events-none"
                 style={{
                   left: zoomLevel > 0 
                     ? `${(currentTime / duration) * duration * zoomLevel}px`
@@ -977,7 +1060,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               >
                 {/* Triangle indicator */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full">
-                  <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-red-500 dark:border-t-red-400"></div>
+                  <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-blue-500 dark:border-t-blue-400"></div>
                 </div>
               </div>
               

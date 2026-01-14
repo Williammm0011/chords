@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { z } from "zod";
 import { youtubeUrlSchema } from "@/lib/validation";
 import WavePlayer from "@/components/WavePlayer";
@@ -27,8 +27,12 @@ export default function Home() {
   const [currentSavedId, setCurrentSavedId] = useState<string | null>(null);
   const [showSaveSuccess, setShowSaveSuccess] = useState(false);
   
-  // Zoom control states
+  // Zoom & timing control states
   const [zoomLevel, setZoomLevel] = useState(27);
+  const [bpm, setBpm] = useState<number | null>(null);
+  const [offset, setOffset] = useState<number | null>(null);
+  const [noteTrack, setNoteTrack] = useState<Record<number, string>>({});
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const handleZoomIn = () => {
     setZoomLevel(prev => {
@@ -134,6 +138,9 @@ export default function Home() {
       updateAudioItem(currentSavedId, {
         title: title || "Untitled",
         notes: notes,
+        bpm,
+        offset,
+        noteTrack,
       });
     } else {
       // Save new
@@ -142,6 +149,9 @@ export default function Home() {
         audioUrl: audioUrl,
         title: title || "Untitled",
         notes: notes,
+        bpm,
+        offset,
+        noteTrack,
       });
       setCurrentSavedId(savedItem.id);
     }
@@ -157,6 +167,9 @@ export default function Home() {
     setAudioUrl(item.audioUrl);
     setTitle(item.title);
     setNotes(item.notes);
+    setBpm(item.bpm ?? null);
+    setOffset(item.offset ?? null);
+    setNoteTrack(item.noteTrack ?? {});
     setCurrentSavedId(item.id);
     setSidebarOpen(false);
     setShowFetchBlock(false); // Hide fetch block when loading saved item
@@ -172,6 +185,9 @@ export default function Home() {
     setAudioUrl(null);
     setTitle("");
     setNotes("");
+    setBpm(null);
+    setOffset(null);
+    setNoteTrack({});
     setCurrentSavedId(null);
     setError("");
     setValidationError("");
@@ -179,6 +195,33 @@ export default function Home() {
     setShowSaveForm(false);
     setShowSaveSuccess(false);
   };
+
+  // Autosave timing and notes (and title/notes) for already-saved items
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!currentSavedId) return;
+    if (!youtubeUrl || !audioUrl) return;
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      updateAudioItem(currentSavedId, {
+        title: title || "Untitled",
+        notes,
+        bpm,
+        offset,
+        noteTrack,
+      });
+    }, 800);
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [currentSavedId, youtubeUrl, audioUrl, title, notes, bpm, offset, noteTrack]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800">
@@ -379,6 +422,12 @@ export default function Home() {
                 onHelpClose={() => setShowHelp(false)}
                 zoomLevel={zoomLevel}
                 onZoomChange={setZoomLevel}
+                initialBpm={bpm}
+                onBpmChange={setBpm}
+                initialOffset={offset}
+                onOffsetChange={setOffset}
+                initialNotes={noteTrack}
+                onNotesChange={setNoteTrack}
               />
 
               {/* Success Toast */}
