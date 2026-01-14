@@ -69,8 +69,8 @@ interface WavePlayerProps {
   onBpmChange?: (bpm: number | null) => void;
   initialOffset?: number | null;
   onOffsetChange?: (offset: number | null) => void;
-  initialNotes?: Record<number, string>;
-  onNotesChange?: (notes: Record<number, string>) => void;
+  initialNotes?: Record<string, string>; // Keys: `${timestamp}-${segmentIndex}` (0-3)
+  onNotesChange?: (notes: Record<string, string>) => void;
 }
 
 interface Region {
@@ -114,7 +114,22 @@ export default function WavePlayer({
   const [internalShowHelp, setInternalShowHelp] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [dragProgressPercent, setDragProgressPercent] = useState(0);
-  const [notes, setNotes] = useState<Record<number, string>>(initialNotes ?? {}); // Notes by timestamp (seconds)
+  const [notes, setNotes] = useState<Record<string, string>>(() => {
+    // Convert old format (Record<number, string>) to new format (Record<string, string>)
+    if (!initialNotes) return {};
+    const converted: Record<string, string> = {};
+    for (const [key, value] of Object.entries(initialNotes)) {
+      // If key is a number (old format), convert to new format with segment 0
+      if (/^\d+\.?\d*$/.test(key)) {
+        converted[`${key}-0`] = value;
+      } else {
+        // Already in new format
+        converted[key] = value;
+      }
+    }
+    return converted;
+  }); // Notes by segment: `${timestamp}-${segmentIndex}`
+  const [hoveredSegment, setHoveredSegment] = useState<string | null>(null); // Track hovered segment: `${timestamp}-${segmentIndex}`
   const [autoScroll, setAutoScroll] = useState(true); // Enable/disable autoscroll
   const [isTypingNote, setIsTypingNote] = useState(false); // Track if user is typing
   const [bpm, setBpm] = useState(initialBpm ?? 120); // Beats per minute
@@ -142,7 +157,16 @@ export default function WavePlayer({
   
   useEffect(() => {
     if (initialNotes) {
-      setNotes(initialNotes);
+      // Convert old format to new format if needed
+      const converted: Record<string, string> = {};
+      for (const [key, value] of Object.entries(initialNotes)) {
+        if (/^\d+\.?\d*$/.test(key)) {
+          converted[`${key}-0`] = value;
+        } else {
+          converted[key] = value;
+        }
+      }
+      setNotes(converted);
     }
   }, [initialNotes]);
   // Use external control if provided, otherwise use internal state
@@ -456,11 +480,12 @@ export default function WavePlayer({
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const handleNoteChange = (timestamp: number, value: string) => {
+  const handleNoteChange = (timestamp: number, segmentIndex: number, value: string) => {
+    const key = `${timestamp}-${segmentIndex}`;
     setNotes(prev => {
       const updated = {
         ...prev,
-        [timestamp]: value,
+        [key]: value,
       };
       if (onNotesChange) {
         onNotesChange(updated);
@@ -1146,14 +1171,15 @@ export default function WavePlayer({
                 );
               })}
 
-              {/* Note inputs at each bar */}
+              {/* Note inputs at each bar - 4 segments per bar */}
               {getNoteTimestamps().map(timestamp => {
                 const barWidth = getBarWidth();
+                const segmentWidth = barWidth / 4;
                 
                 return (
                   <div
                     key={`note-${timestamp}`}
-                    className="absolute top-6"
+                    className="absolute top-6 flex"
                     style={{
                       left: zoomLevel > 0 
                         ? `${(timestamp / duration) * duration * zoomLevel}px`
@@ -1164,28 +1190,56 @@ export default function WavePlayer({
                       minWidth: '60px'
                     }}
                   >
-                    <input
-                      type="text"
-                      value={notes[timestamp] || ''}
-                      onChange={(e) => handleNoteChange(timestamp, e.target.value)}
-                      onFocus={(e) => {
-                        setIsTypingNote(true);
-                      }}
-                      onBlur={(e) => {
-                        setIsTypingNote(false);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === 'Escape') {
-                          e.currentTarget.blur();
-                        }
-                      }}
-                      placeholder=""
-                      data-timestamp={timestamp}
-                      className="w-full px-2 py-1 text-sm rounded text-gray-900 dark:text-gray-100 
-                                 bg-transparent border border-transparent cursor-text
-                                 focus:ring-2 focus:ring-blue-500 focus:border-blue-400 dark:focus:border-blue-400
-                                 transition-colors"
-                    />
+                    {/* 4 segments, each with its own input */}
+                    {Array.from({ length: 4 }).map((_, segmentIndex) => {
+                      const segmentKey = `${timestamp}-${segmentIndex}`;
+                      const isHovered = hoveredSegment === segmentKey;
+                      
+                      return (
+                        <div
+                          key={segmentIndex}
+                          className="flex-1 relative"
+                          onMouseEnter={() => setHoveredSegment(segmentKey)}
+                          onMouseLeave={() => setHoveredSegment(null)}
+                        >
+                          {/* Hover highlight - only visible when this segment is hovered */}
+                          <div
+                            className={`absolute inset-0 transition-opacity duration-150 ${
+                              isHovered 
+                                ? 'opacity-100 bg-blue-500/10 dark:bg-blue-400/10' 
+                                : 'opacity-0'
+                            }`}
+                          />
+                          
+                          {/* Transparent text input */}
+                          <input
+                            type="text"
+                            value={notes[segmentKey] || ''}
+                            onChange={(e) => handleNoteChange(timestamp, segmentIndex, e.target.value)}
+                            onFocus={(e) => {
+                              setIsTypingNote(true);
+                              setHoveredSegment(segmentKey);
+                            }}
+                            onBlur={(e) => {
+                              setIsTypingNote(false);
+                              setHoveredSegment(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === 'Escape') {
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            placeholder=""
+                            data-timestamp={timestamp}
+                            data-segment={segmentIndex}
+                            className="w-full h-full px-1 py-1 text-sm rounded text-gray-900 dark:text-gray-100 
+                                     bg-transparent border border-transparent cursor-text relative z-10
+                                     focus:ring-2 focus:ring-blue-500 focus:border-blue-400 dark:focus:border-blue-400
+                                     transition-colors"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}

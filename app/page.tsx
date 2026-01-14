@@ -32,7 +32,7 @@ export default function Home() {
   const [zoomLevel, setZoomLevel] = useState(27);
   const [bpm, setBpm] = useState<number | null>(null);
   const [offset, setOffset] = useState<number | null>(null);
-  const [noteTrack, setNoteTrack] = useState<Record<number, string>>({});
+  const [noteTrack, setNoteTrack] = useState<Record<string, string>>({}); // Keys: `${timestamp}-${segmentIndex}`
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const handleZoomIn = () => {
@@ -170,7 +170,21 @@ export default function Home() {
     setNotes(item.notes);
     setBpm(item.bpm ?? null);
     setOffset(item.offset ?? null);
-    setNoteTrack(item.noteTrack ?? {});
+    
+    // Convert old format (Record<number, string>) to new format (Record<string, string>) if needed
+    const noteTrackData = item.noteTrack ?? {};
+    const convertedNoteTrack: Record<string, string> = {};
+    for (const [key, value] of Object.entries(noteTrackData)) {
+      // If key is a number (old format), convert to new format with segment 0
+      if (/^\d+\.?\d*$/.test(key)) {
+        convertedNoteTrack[`${key}-0`] = value;
+      } else {
+        // Already in new format
+        convertedNoteTrack[key] = value;
+      }
+    }
+    setNoteTrack(convertedNoteTrack);
+    
     setCurrentSavedId(item.id);
     setSidebarOpen(false);
     setShowFetchBlock(false); // Hide fetch block when loading saved item
