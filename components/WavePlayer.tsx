@@ -97,6 +97,10 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [bpm, setBpm] = useState(120); // Beats per minute
   const [beatsPerBar, setBeatsPerBar] = useState(4); // Time signature / beats per bar
   const [offset, setOffset] = useState(0); // Offset in seconds to align with music
+  const [metronomeActive, setMetronomeActive] = useState(false); // Metronome playing state
+  const [metronomeWasActive, setMetronomeWasActive] = useState(false); // Track if metronome was playing before BPM became invalid
+  const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
+  const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
   
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
@@ -411,6 +415,100 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
       [timestamp]: value
     }));
   };
+
+  // Play a metronome click sound
+  const playMetronomeClick = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    
+    const ctx = audioContextRef.current;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    oscillator.frequency.value = 1000; // 1kHz click
+    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+    
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + 0.05);
+  };
+
+  // Toggle metronome play/stop
+  const toggleMetronome = () => {
+    if (metronomeActive) {
+      // Stop metronome (manually stopped by user, so don't restart)
+      if (metronomeIntervalRef.current) {
+        clearInterval(metronomeIntervalRef.current);
+        metronomeIntervalRef.current = null;
+      }
+      setMetronomeActive(false);
+      setMetronomeWasActive(false); // User manually stopped, don't auto-restart
+    } else {
+      // Only start if BPM is valid
+      if (bpm > 0) {
+        // Start metronome
+        const intervalMs = (60 / bpm) * 1000;
+        
+        // Play first click immediately
+        playMetronomeClick();
+        
+        // Set up interval for subsequent clicks
+        metronomeIntervalRef.current = setInterval(() => {
+          playMetronomeClick();
+        }, intervalMs);
+        
+        setMetronomeActive(true);
+        setMetronomeWasActive(false); // Reset flag
+      }
+    }
+  };
+
+  // Cleanup metronome on unmount
+  useEffect(() => {
+    return () => {
+      if (metronomeIntervalRef.current) {
+        clearInterval(metronomeIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Update metronome interval when BPM changes while playing
+  useEffect(() => {
+    if (metronomeActive && metronomeIntervalRef.current) {
+      if (bpm > 0) {
+        // Update to new BPM
+        clearInterval(metronomeIntervalRef.current);
+        const intervalMs = (60 / bpm) * 1000;
+        metronomeIntervalRef.current = setInterval(() => {
+          playMetronomeClick();
+        }, intervalMs);
+      } else {
+        // Stop if BPM becomes invalid, but remember it was active
+        clearInterval(metronomeIntervalRef.current);
+        metronomeIntervalRef.current = null;
+        setMetronomeActive(false);
+        setMetronomeWasActive(true);
+      }
+    } else if (!metronomeActive && metronomeWasActive && bpm > 0) {
+      // Restart if BPM becomes valid again and it was previously active
+      const intervalMs = (60 / bpm) * 1000;
+      
+      // Play first click immediately
+      playMetronomeClick();
+      
+      // Set up interval for subsequent clicks
+      metronomeIntervalRef.current = setInterval(() => {
+        playMetronomeClick();
+      }, intervalMs);
+      
+      setMetronomeActive(true);
+      setMetronomeWasActive(false);
+    }
+  }, [bpm, metronomeActive, metronomeWasActive]);
 
   // Generate note timestamps for each bar based on BPM and time signature
   const getNoteTimestamps = (): number[] => {
@@ -744,12 +842,28 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               type="number"
               min="1"
               max="300"
-              value={bpm}
-              onChange={(e) => setBpm(Math.max(1, parseInt(e.target.value) || 1))}
+              value={bpm || ''}
+              onChange={(e) => setBpm(parseInt(e.target.value) || 0)}
               className="w-16 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
                        bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
                        focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
+            <button
+              onClick={toggleMetronome}
+              disabled={bpm <= 0}
+              className={`p-1.5 rounded transition-colors ${
+                metronomeActive 
+                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400' 
+                  : bpm > 0
+                    ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-600 cursor-not-allowed'
+              }`}
+              title={metronomeActive ? 'Stop metronome' : bpm > 0 ? 'Start metronome' : 'Enter BPM to use metronome'}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3L4 21h16L12 3z M12 3v10" />
+              </svg>
+            </button>
           </div>
           
           <div className="flex items-center gap-2">
@@ -763,8 +877,8 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               type="number"
               min="1"
               max="16"
-              value={beatsPerBar}
-              onChange={(e) => setBeatsPerBar(Math.max(1, parseInt(e.target.value) || 1))}
+              value={beatsPerBar || ''}
+              onChange={(e) => setBeatsPerBar(parseInt(e.target.value) || 0)}
               className="w-12 px-2 py-1 rounded border border-gray-300 dark:border-gray-600
                        bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
                        focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -857,7 +971,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               })}
               
               {/* Background grid lines for each bar */}
-              {getNoteTimestamps().map(timestamp => {
+              {getNoteTimestamps().map((timestamp, index) => {
                 const isCurrentBar = getCurrentBarTimestamp() === timestamp;
                 return (
                   <div
@@ -878,7 +992,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
                         ? 'text-blue-600 dark:text-blue-300 font-semibold' 
                         : 'text-gray-500 dark:text-gray-400'
                     }`}>
-                      {formatTime(timestamp)}
+                      {index + 1}
                     </div>
                   </div>
                 );
