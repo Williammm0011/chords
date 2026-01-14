@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { z } from "zod";
 import { youtubeUrlSchema } from "@/lib/validation";
 import WavePlayer from "@/components/WavePlayer";
+import SavedAudioSidebar from "@/components/SavedAudioSidebar";
+import { saveAudioItem, updateAudioItem, type SavedAudioItem } from "@/lib/savedAudio";
 
 export default function Home() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -12,6 +14,13 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isValid, setIsValid] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Metadata states
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
+  const [currentSavedId, setCurrentSavedId] = useState<string | null>(null);
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false);
 
   // Validate URL on change
   useEffect(() => {
@@ -37,6 +46,7 @@ export default function Home() {
     setError("");
     setLoading(true);
     setAudioUrl(null);
+    setCurrentSavedId(null);
 
     try {
       // Validate URL (redundant but safe)
@@ -68,6 +78,14 @@ export default function Home() {
         if (data.cached) {
           console.log("✓ Loaded from cache");
         }
+        
+        // Auto-fill title from URL if empty
+        if (!title) {
+          const videoIdMatch = youtubeUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+          if (videoIdMatch) {
+            setTitle(`YouTube Video ${videoIdMatch[1]}`);
+          }
+        }
       } else {
         setError("Unexpected response format");
       }
@@ -82,18 +100,68 @@ export default function Home() {
     }
   };
 
+  const handleSave = () => {
+    if (!youtubeUrl || !audioUrl) return;
+
+    if (currentSavedId) {
+      // Update existing
+      updateAudioItem(currentSavedId, {
+        title: title || "Untitled",
+        notes: notes,
+      });
+    } else {
+      // Save new
+      const savedItem = saveAudioItem({
+        url: youtubeUrl,
+        audioUrl: audioUrl,
+        title: title || "Untitled",
+        notes: notes,
+      });
+      setCurrentSavedId(savedItem.id);
+    }
+
+    // Show success message
+    setShowSaveSuccess(true);
+    setTimeout(() => setShowSaveSuccess(false), 3000);
+  };
+
+  const handleLoadSavedItem = (item: SavedAudioItem) => {
+    setYoutubeUrl(item.url);
+    setAudioUrl(item.audioUrl);
+    setTitle(item.title);
+    setNotes(item.notes);
+    setCurrentSavedId(item.id);
+    setSidebarOpen(false);
+
+    // Update last accessed
+    updateAudioItem(item.id, {});
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800">
       <div className="container mx-auto px-4 py-12">
         <div className="max-w-4xl mx-auto">
           {/* Header */}
-          <div className="text-center mb-12">
+          <div className="text-center mb-12 relative">
             <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               Chord Clip Looper
             </h1>
             <p className="text-lg text-gray-600 dark:text-gray-300">
               Download audio from YouTube and loop specific regions
             </p>
+
+            {/* Sidebar Toggle Button */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="absolute top-0 left-0 p-3 rounded-lg bg-white dark:bg-gray-800 shadow-lg
+                       hover:shadow-xl transition-all duration-200 group"
+              aria-label="Open saved audio"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" 
+                   className="w-6 h-6 text-gray-700 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+              </svg>
+            </button>
           </div>
 
           {/* Input Card */}
@@ -170,6 +238,66 @@ export default function Home() {
               >
                 {loading ? "Fetching..." : "Fetch Audio"}
               </button>
+
+              {/* Metadata Form (shown after audio is loaded) */}
+              {audioUrl && (
+                <div className="pt-6 border-t border-gray-200 dark:border-gray-700 space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                    Save This Audio
+                  </h3>
+
+                  <div>
+                    <label htmlFor="title" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Title
+                    </label>
+                    <input
+                      id="title"
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="e.g., Guitar Solo Practice"
+                      className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600
+                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                               focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Notes (optional)
+                    </label>
+                    <textarea
+                      id="notes"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Add any notes about this audio..."
+                      rows={3}
+                      className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600
+                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                               focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleSave}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg
+                             transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+                    </svg>
+                    {currentSavedId ? "Update Saved Audio" : "Save Audio"}
+                  </button>
+
+                  {showSaveSuccess && (
+                    <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg text-center">
+                      <p className="text-sm text-green-700 dark:text-green-300 font-medium">
+                        ✓ Saved successfully!
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -177,7 +305,13 @@ export default function Home() {
           {audioUrl && <WavePlayer audioUrl={audioUrl} />}
         </div>
       </div>
+
+      {/* Sidebar */}
+      <SavedAudioSidebar
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+        onLoadItem={handleLoadSavedItem}
+      />
     </div>
   );
 }
-

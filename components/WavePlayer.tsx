@@ -14,44 +14,32 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
  * - Time display shows current time / total duration
  * - Use zoom slider or +/− buttons to zoom in/out for precise editing
  * 
- * CREATING A LOOP REGION (3 methods):
- * 1. DRAG METHOD: Click and drag on waveform to select region
- * 2. SET A/B METHOD (Recommended for practice):
- *    - Play audio and press "Set A" when you reach the start point
- *    - Continue playing and press "Set B" when you reach the end point
- * 3. CLICK METHOD: Click edges of existing region and drag to adjust
+ * CREATING A LOOP REGION:
+ * - Click and drag on waveform to select a region
+ * - Click edges of existing region and drag to adjust
+ * - The playback will automatically loop within the selected region
+ * - When a region is created, playback will jump to the region start
  * 
- * FINE-TUNING YOUR REGION:
- * - Use nudge buttons to adjust start/end precisely:
- *   • ±0.05s for fine adjustments (frame-accurate)
- *   • ±0.5s for quick adjustments
- * - All adjustments are clamped within track boundaries [0, duration]
- * - Minimum region length: 0.1 seconds
- * 
- * LOOPING:
- * - Click "Loop ON" button to enable seamless looping
- * - Audio will restart at region start when reaching region end
- * - No gaps or clicks - perfect for practice
- * - Toggle off anytime to play normally
+ * REGION CONTROLS:
+ * - "Replay" button: Jump back to region start and play
+ * - "Clear" button: Remove the region selection
  * 
  * KEYBOARD SHORTCUTS:
- * - Space: Play/Pause (works anytime)
- * - L: Toggle loop ON/OFF (only when region exists)
- * - Esc: Clear region and disable loop
+ * - Space: Play/Pause
+ * - Esc: Clear region selection
  * 
- * PRACTICE WORKFLOW EXAMPLE:
+ * PRACTICE WORKFLOW:
  * 1. Load your YouTube video
- * 2. Play through and press "Set A" at difficult section start
- * 3. Continue and press "Set B" at section end
- * 4. Fine-tune with ±0.05s buttons if needed
- * 5. Click "Loop ON" and press Space to practice
- * 6. Adjust region on-the-fly while looping
+ * 2. Click and drag on the waveform to select a difficult section
+ * 3. The audio will automatically loop that section
+ * 4. Use "Replay" to restart from the beginning of the region
+ * 5. Adjust region by dragging its edges
+ * 6. Press Esc to clear and select a new region
  * 
  * TIPS:
  * - Shorter loops (2-5 seconds) work best for practice
- * - Use ±0.05s buttons for catching exact beat/note start
- * - Press L to quickly toggle loop without mouse
- * - Region timestamps show exact timing for reference
+ * - Zoom in for precise region selection
+ * - The looping is seamless with no gaps
  */
 
 interface WavePlayerProps {
@@ -76,21 +64,15 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
-  const [isLooping, setIsLooping] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = default fit, higher = more zoomed
 
   // Use refs to store latest state for the interval (avoid stale closure)
   const currentRegionRef = useRef<Region | null>(null);
-  const isLoopingRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
     currentRegionRef.current = currentRegion;
   }, [currentRegion]);
-
-  useEffect(() => {
-    isLoopingRef.current = isLooping;
-  }, [isLooping]);
 
   // Initialize WaveSurfer
   useEffect(() => {
@@ -132,6 +114,9 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
 
     // Region event handlers
     regions.on("region-created", (region: any) => {
+      // Disable dragging the region (moving it), but keep resize enabled
+      region.setOptions({ drag: false });
+
       // Remove other regions (only allow one)
       const allRegions = regions.getRegions();
       allRegions.forEach((r: any) => {
@@ -140,11 +125,34 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
         }
       });
 
+      // Handle mousedown inside region: clear it to allow new selection
+      // This enables dragging inside a region to create a new one
+      region.element.addEventListener("mousedown", (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        
+        // Check if clicking on resize handles (edges)
+        // Resize handles have specific classes or cursor styles
+        const isResizeHandle = target.classList.contains('wavesurfer-handle') ||
+                               target.classList.contains('wavesurfer-region-handle') ||
+                               target.dataset.resize !== undefined;
+        
+        if (!isResizeHandle) {
+          // Clicking/dragging inside region content - remove it to allow new selection
+          region.remove();
+        }
+      });
+
       setCurrentRegion({
         id: region.id,
         start: region.start,
         end: region.end,
       });
+
+      // Auto-seek to region start if current position is not within region
+      const currentTime = wavesurfer.getCurrentTime();
+      if (currentTime < region.start || currentTime > region.end) {
+        wavesurfer.setTime(region.start);
+      }
     });
 
     regions.on("region-updated", (region: any) => {
@@ -157,7 +165,6 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
 
     regions.on("region-removed", () => {
       setCurrentRegion(null);
-      setIsLooping(false);
     });
 
     // Enable drag selection to create regions
@@ -197,8 +204,8 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
     wavesurfer.on("finish", () => {
       if (!isMounted) return;
       
-      // If looping and region exists, restart from region start
-      if (isLoopingRef.current && currentRegionRef.current) {
+      // If region exists, restart from region start
+      if (currentRegionRef.current) {
         wavesurfer.setTime(currentRegionRef.current.start);
         wavesurfer.play();
       } else {
@@ -248,97 +255,35 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
     }
   };
 
-  const handleToggleLoop = () => {
-    if (!currentRegion) return;
-    setIsLooping(!isLooping);
-  };
-
   const handleClearRegion = () => {
     if (regionsPluginRef.current) {
       regionsPluginRef.current.clearRegions();
       setCurrentRegion(null);
-      setIsLooping(false);
     }
   };
 
-  // Set region start (A) to current playhead time
-  const handleSetA = () => {
-    if (!wavesurferRef.current || !regionsPluginRef.current) return;
-    
-    const currentTime = wavesurferRef.current.getCurrentTime();
-    const clampedTime = Math.max(0, Math.min(currentTime, duration));
+  const handleReplay = () => {
+    if (!wavesurferRef.current) return;
     
     if (currentRegion) {
-      // Update existing region's start
-      const regions = regionsPluginRef.current.getRegions();
-      const region = regions.find((r: any) => r.id === currentRegion.id);
-      if (region) {
-        region.setOptions({
-          start: clampedTime,
-          end: Math.max(clampedTime + 0.1, currentRegion.end), // Ensure end > start
-        });
-      }
+      // If region exists, replay from region start
+      wavesurferRef.current.setTime(currentRegion.start);
     } else {
-      // Create new region from current time to end
-      regionsPluginRef.current.addRegion({
-        start: clampedTime,
-        end: Math.min(clampedTime + 5, duration), // Default 5s region
-        color: "rgba(99, 102, 241, 0.3)",
-      });
+      // If no region, restart from beginning
+      wavesurferRef.current.setTime(0);
     }
+    wavesurferRef.current.play();
   };
 
-  // Set region end (B) to current playhead time
-  const handleSetB = () => {
-    if (!wavesurferRef.current || !regionsPluginRef.current) return;
+  const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!wavesurferRef.current || !duration) return;
     
-    const currentTime = wavesurferRef.current.getCurrentTime();
-    const clampedTime = Math.max(0, Math.min(currentTime, duration));
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percentage = x / rect.width;
+    const newTime = percentage * duration;
     
-    if (currentRegion) {
-      // Update existing region's end
-      const regions = regionsPluginRef.current.getRegions();
-      const region = regions.find((r: any) => r.id === currentRegion.id);
-      if (region) {
-        region.setOptions({
-          start: Math.min(currentRegion.start, clampedTime - 0.1), // Ensure start < end
-          end: clampedTime,
-        });
-      }
-    } else {
-      // Create new region from start to current time
-      regionsPluginRef.current.addRegion({
-        start: Math.max(0, clampedTime - 5), // Default 5s region
-        end: clampedTime,
-        color: "rgba(99, 102, 241, 0.3)",
-      });
-    }
-  };
-
-  // Nudge region start by delta seconds
-  const handleNudgeStart = (delta: number) => {
-    if (!currentRegion || !regionsPluginRef.current) return;
-    
-    const newStart = Math.max(0, Math.min(currentRegion.start + delta, currentRegion.end - 0.1));
-    
-    const regions = regionsPluginRef.current.getRegions();
-    const region = regions.find((r: any) => r.id === currentRegion.id);
-    if (region) {
-      region.setOptions({ start: newStart });
-    }
-  };
-
-  // Nudge region end by delta seconds
-  const handleNudgeEnd = (delta: number) => {
-    if (!currentRegion || !regionsPluginRef.current) return;
-    
-    const newEnd = Math.max(currentRegion.start + 0.1, Math.min(currentRegion.end + delta, duration));
-    
-    const regions = regionsPluginRef.current.getRegions();
-    const region = regions.find((r: any) => r.id === currentRegion.id);
-    if (region) {
-      region.setOptions({ end: newEnd });
-    }
+    wavesurferRef.current.setTime(newTime);
   };
 
   const formatTime = (seconds: number): string => {
@@ -355,15 +300,15 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       loopIntervalRef.current = null;
     }
 
-    // Only start monitoring if all conditions are met
-    if (!isPlaying || !isLooping || !currentRegion) {
+    // Only start monitoring if playing and region exists
+    if (!isPlaying || !currentRegion) {
       return;
     }
     
     // Start loop monitoring
     loopIntervalRef.current = setInterval(() => {
       if (!wavesurferRef.current) return;
-      if (!isLoopingRef.current || !currentRegionRef.current) return;
+      if (!currentRegionRef.current) return;
 
       const time = wavesurferRef.current.getCurrentTime();
       
@@ -380,7 +325,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
         loopIntervalRef.current = null;
       }
     };
-  }, [isPlaying, isLooping, currentRegion?.id]); // Use region ID instead of full object
+  }, [isPlaying, currentRegion?.id]); // Use region ID instead of full object
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -395,13 +340,6 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           e.preventDefault();
           handlePlayPause();
           break;
-        case "l":
-        case "L": // L - toggle loop
-          e.preventDefault();
-          if (currentRegion) {
-            handleToggleLoop();
-          }
-          break;
         case "Escape": // Esc - clear region
           e.preventDefault();
           handleClearRegion();
@@ -411,7 +349,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentRegion, isLooping]); // Re-attach when these change
+  }, [currentRegion]); // Re-attach when region changes
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
@@ -447,8 +385,26 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
 
       {/* Controls */}
       <div className="space-y-4">
-        {/* Play/Pause Button */}
-        <div className="flex items-center justify-center gap-4">
+        {/* Playback Controls */}
+        <div className="flex items-center justify-center gap-3">
+          {/* Replay Button */}
+          <button
+            onClick={handleReplay}
+            disabled={isLoading || !!error}
+            className="flex items-center justify-center w-12 h-12 rounded-full 
+                     bg-gray-200 dark:bg-gray-700 
+                     hover:bg-gray-300 dark:hover:bg-gray-600
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     text-gray-700 dark:text-gray-200
+                     transition-all duration-200 transform hover:scale-105"
+            title={currentRegion ? "Replay from region start" : "Replay from beginning"}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+              <path fillRule="evenodd" d="M4.755 10.059a7.5 7.5 0 0112.548-3.364l1.903 1.903h-3.183a.75.75 0 100 1.5h4.992a.75.75 0 00.75-.75V4.356a.75.75 0 00-1.5 0v3.18l-1.9-1.9A9 9 0 003.306 9.67a.75.75 0 101.45.388zm15.408 3.352a.75.75 0 00-.919.53 7.5 7.5 0 01-12.548 3.364l-1.902-1.903h3.183a.75.75 0 000-1.5H2.984a.75.75 0 00-.75.75v4.992a.75.75 0 001.5 0v-3.18l1.9 1.9a9 9 0 0015.059-4.035.75.75 0 00-.53-.918z" clipRule="evenodd" />
+            </svg>
+          </button>
+
+          {/* Play/Pause Button */}
           <button
             onClick={handlePlayPause}
             disabled={isLoading || !!error}
@@ -488,6 +444,24 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
               </svg>
             )}
           </button>
+
+          {/* Cancel/Clear Region Button */}
+          <button
+            onClick={handleClearRegion}
+            disabled={isLoading || !!error || !currentRegion}
+            className="flex items-center justify-center w-12 h-12 rounded-full 
+                     bg-gray-200 dark:bg-gray-700 
+                     hover:bg-red-100 dark:hover:bg-red-900/30
+                     disabled:opacity-30 disabled:cursor-not-allowed
+                     text-gray-700 dark:text-gray-200
+                     hover:text-red-600 dark:hover:text-red-400
+                     transition-all duration-200 transform hover:scale-105"
+            title="Clear region"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+              <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 011.06 0L12 10.94l5.47-5.47a.75.75 0 111.06 1.06L13.06 12l5.47 5.47a.75.75 0 11-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 01-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 010-1.06z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
 
         {/* Time Display */}
@@ -497,14 +471,26 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           <span className="font-mono">{formatTime(duration)}</span>
         </div>
 
-        {/* Progress Bar (Timeline) */}
-        <div className="relative">
-          <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        {/* Progress Bar (Timeline) - Draggable */}
+        <div 
+          className="relative cursor-pointer group"
+          onClick={handleProgressBarClick}
+          title="Click to seek"
+        >
+          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden hover:h-4 transition-all duration-150">
+            {/* Progress fill - no transition to avoid visual lag during region loops */}
             <div
-              className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-100"
+              className="h-full bg-gradient-to-r from-blue-600 to-purple-600"
               style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
             />
           </div>
+          {/* Playhead indicator */}
+          <div 
+            className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white dark:bg-gray-200 rounded-full shadow-lg 
+                     border-2 border-blue-600 opacity-0 group-hover:opacity-100 transition-opacity duration-150
+                     pointer-events-none"
+            style={{ left: `calc(${duration > 0 ? (currentTime / duration) * 100 : 0}% - 8px)` }}
+          />
         </div>
 
         {/* Zoom Controls */}
@@ -558,179 +544,39 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           </span>
         </div>
 
-        {/* Set A/B Buttons (Always visible when audio loaded) */}
-        <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <button
-            onClick={handleSetA}
-            disabled={isLoading || !!error}
-            className="flex-1 py-2 px-4 rounded-lg font-semibold text-sm
-              bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400
-              text-white transition-all duration-200
-              disabled:cursor-not-allowed"
-            title="Set region start to current playhead position"
-          >
-            Set A (Start)
-          </button>
-          <button
-            onClick={handleSetB}
-            disabled={isLoading || !!error}
-            className="flex-1 py-2 px-4 rounded-lg font-semibold text-sm
-              bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400
-              text-white transition-all duration-200
-              disabled:cursor-not-allowed"
-            title="Set region end to current playhead position"
-          >
-            Set B (End)
-          </button>
-        </div>
-
-        {/* Region Controls */}
+        {/* Region Controls (shown only when region exists) */}
         {currentRegion && (
           <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100">
-              Loop Region
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-green-600">
+                <path d="M5.055 7.06C3.805 6.347 2.25 7.25 2.25 8.69v8.122c0 1.44 1.555 2.343 2.805 1.628l7.108-4.061c1.26-.72 1.26-2.536 0-3.256L5.055 7.061zM12.75 8.69c0-1.44 1.555-2.343 2.805-1.628l7.108 4.061c1.26.72 1.26 2.536 0 3.256l-7.108 4.061c-1.25.714-2.805-.189-2.805-1.628V8.69z" />
+              </svg>
+              Loop Region Active
             </h3>
             
             {/* Region Timestamps */}
-            <div className="flex items-center justify-between text-sm bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+            <div className="flex items-center justify-between text-sm bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
               <div>
                 <span className="text-gray-500 dark:text-gray-400">Start:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100">
+                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
                   {formatTime(currentRegion.start)}
                 </span>
               </div>
-              <div className="text-gray-400 dark:text-gray-500">→</div>
+              <div className="text-green-600 dark:text-green-400">→</div>
               <div>
                 <span className="text-gray-500 dark:text-gray-400">End:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100">
+                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
                   {formatTime(currentRegion.end)}
                 </span>
               </div>
               <div>
                 <span className="text-gray-500 dark:text-gray-400">Duration:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100">
+                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
                   {formatTime(currentRegion.end - currentRegion.start)}
                 </span>
               </div>
             </div>
 
-            {/* Fine-tune Controls */}
-            <div className="space-y-3">
-              {/* Start Nudge Controls */}
-              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
-                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
-                  Adjust Start
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleNudgeStart(-0.5)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move start earlier by 0.5 seconds"
-                  >
-                    -0.5s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeStart(-0.05)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move start earlier by 0.05 seconds"
-                  >
-                    -0.05s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeStart(0.05)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move start later by 0.05 seconds"
-                  >
-                    +0.05s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeStart(0.5)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move start later by 0.5 seconds"
-                  >
-                    +0.5s
-                  </button>
-                </div>
-              </div>
-
-              {/* End Nudge Controls */}
-              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
-                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
-                  Adjust End
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleNudgeEnd(-0.5)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move end earlier by 0.5 seconds"
-                  >
-                    -0.5s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeEnd(-0.05)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move end earlier by 0.05 seconds"
-                  >
-                    -0.05s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeEnd(0.05)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move end later by 0.05 seconds"
-                  >
-                    +0.05s
-                  </button>
-                  <button
-                    onClick={() => handleNudgeEnd(0.5)}
-                    className="flex-1 py-2 px-3 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                      text-gray-800 dark:text-gray-100 font-mono text-sm transition-all"
-                    title="Move end later by 0.5 seconds"
-                  >
-                    +0.5s
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Loop and Clear Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={handleToggleLoop}
-                className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg font-semibold
-                  transition-all duration-200 transform hover:scale-[1.02]
-                  ${isLooping 
-                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg' 
-                    : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100'
-                  }`}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                  <path d="M5.055 7.06C3.805 6.347 2.25 7.25 2.25 8.69v8.122c0 1.44 1.555 2.343 2.805 1.628l7.108-4.061c1.26-.72 1.26-2.536 0-3.256L5.055 7.061zM12.75 8.69c0-1.44 1.555-2.343 2.805-1.628l7.108 4.061c1.26.72 1.26 2.536 0 3.256l-7.108 4.061c-1.25.714-2.805-.189-2.805-1.628V8.69z" />
-                </svg>
-                {isLooping ? "Loop ON" : "Loop OFF"}
-                <span className="text-xs opacity-75">(L)</span>
-              </button>
-              
-              <button
-                onClick={handleClearRegion}
-                className="px-6 py-3 rounded-lg font-semibold
-                  bg-red-600 hover:bg-red-700 text-white
-                  transition-all duration-200 transform hover:scale-[1.02]
-                  shadow-lg hover:shadow-xl flex items-center gap-2"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                  <path fillRule="evenodd" d="M16.5 4.478v.227a48.816 48.816 0 013.878.512.75.75 0 11-.256 1.478l-.209-.035-1.005 13.07a3 3 0 01-2.991 2.77H8.084a3 3 0 01-2.991-2.77L4.087 6.66l-.209.035a.75.75 0 01-.256-1.478A48.567 48.567 0 017.5 4.705v-.227c0-1.564 1.213-2.9 2.816-2.951a52.662 52.662 0 013.369 0c1.603.051 2.815 1.387 2.815 2.951zm-6.136-1.452a51.196 51.196 0 013.273 0C14.39 3.05 15 3.684 15 4.478v.113a49.488 49.488 0 00-6 0v-.113c0-.794.609-1.428 1.364-1.452zm-.355 5.945a.75.75 0 10-1.5.058l.347 9a.75.75 0 101.499-.058l-.346-9zm5.48.058a.75.75 0 10-1.498-.058l-.347 9a.75.75 0 001.5.058l.345-9z" clipRule="evenodd" />
-                </svg>
-                Clear
-                <span className="text-xs opacity-75">(Esc)</span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -738,13 +584,13 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
         <div className="text-xs text-center text-gray-500 dark:text-gray-400 mt-4 space-y-1">
           {!currentRegion ? (
             <>
-              <p className="font-semibold">Create a loop region:</p>
-              <p>Drag on waveform OR use Set A/B buttons while playing</p>
+              <p className="font-semibold">Drag on waveform to create a loop region</p>
+              <p>Click progress bar to seek • Space: play/pause</p>
             </>
           ) : (
             <>
-              <p className="font-semibold">Practice mode active</p>
-              <p>Fine-tune with nudge buttons • Space: play/pause • L: toggle loop • Esc: clear</p>
+              <p className="font-semibold">🔁 Looping active • Adjust region by dragging its edges</p>
+              <p>Space: play/pause • Esc: clear region</p>
             </>
           )}
         </div>
