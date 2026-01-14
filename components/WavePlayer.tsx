@@ -948,6 +948,22 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
                 minWidth: '100%'
               }}
             >
+              {/* Playhead indicator for offset adjustment */}
+              <div
+                className="absolute top-0 w-0.5 h-2 bg-red-500 dark:bg-red-400 z-20 pointer-events-none"
+                style={{
+                  left: zoomLevel > 0 
+                    ? `${(currentTime / duration) * duration * zoomLevel}px`
+                    : `${(currentTime / duration) * 100}%`,
+                  transform: 'translateX(-1px)'
+                }}
+              >
+                {/* Triangle indicator */}
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full">
+                  <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-red-500 dark:border-t-red-400"></div>
+                </div>
+              </div>
+              
               {/* Current bar background highlight */}
               {getNoteTimestamps().map(timestamp => {
                 const isCurrentBar = getCurrentBarTimestamp() === timestamp;
