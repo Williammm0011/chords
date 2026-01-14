@@ -67,6 +67,10 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
   const loopIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const noteTrackRef = useRef<HTMLDivElement>(null);
+  const autoScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isAutoScrollingRef = useRef<boolean>(false); // Flag to prevent scroll event from disabling autoscroll
+  const isSyncingScrollRef = useRef<boolean>(false); // Flag to prevent infinite scroll sync loops
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -74,10 +78,13 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
-  const [zoomLevel, setZoomLevel] = useState(0); // 0 = default fit, higher = more zoomed
+  const [zoomLevel, setZoomLevel] = useState(27); // 0 = fit, 5-500 = px per second (default 27)
   const [internalShowHelp, setInternalShowHelp] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [dragProgressPercent, setDragProgressPercent] = useState(0);
+  const [notes, setNotes] = useState<Record<number, string>>({}); // Notes by timestamp (seconds)
+  const [autoScroll, setAutoScroll] = useState(true); // Enable/disable autoscroll
+  const [isTypingNote, setIsTypingNote] = useState(false); // Track if user is typing
   
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
@@ -210,6 +217,11 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
       
       setDuration(wavesurfer.getDuration());
       setIsLoading(false);
+      
+      // Apply the initial zoom level
+      if (zoomLevel > 0) {
+        wavesurfer.zoom(zoomLevel);
+      }
     });
 
     wavesurfer.on("audioprocess", () => {
@@ -381,6 +393,23 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const handleNoteChange = (timestamp: number, value: string) => {
+    setNotes(prev => ({
+      ...prev,
+      [timestamp]: value
+    }));
+  };
+
+  // Generate note timestamps every 5 seconds
+  const getNoteTimestamps = (): number[] => {
+    if (!duration) return [];
+    const timestamps: number[] = [];
+    for (let t = 0; t <= Math.floor(duration); t += 5) {
+      timestamps.push(t);
+    }
+    return timestamps;
+  };
+
   // Loop monitoring effect
   useEffect(() => {
     // Clear any existing interval first
@@ -510,6 +539,95 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
     };
   }, [isDraggingProgress, dragProgressPercent, duration]);
 
+  // Ensure containers stay synced when zoom level changes
+  useEffect(() => {
+    if (!containerRef.current || !noteTrackRef.current) return;
+    
+    // Sync scroll positions after zoom changes
+    const syncScroll = () => {
+      if (containerRef.current && noteTrackRef.current) {
+        // Use waveform as source of truth
+        noteTrackRef.current.scrollLeft = containerRef.current.scrollLeft;
+      }
+    };
+    
+    // Small delay to allow wavesurfer to update
+    const timeoutId = setTimeout(syncScroll, 50);
+    
+    return () => clearTimeout(timeoutId);
+  }, [zoomLevel]);
+
+  // Smooth autoscroll waveform and note track during playback
+  useEffect(() => {
+    if (!isPlaying || !autoScroll || zoomLevel === 0 || isTypingNote) return;
+    if (!duration) return;
+
+    // Set flag to indicate autoscroll is active
+    isAutoScrollingRef.current = true;
+    
+    let animationFrameId: number;
+    
+    const updateScroll = () => {
+      if (!containerRef.current || !noteTrackRef.current) {
+        animationFrameId = requestAnimationFrame(updateScroll);
+        return;
+      }
+      if (!wavesurferRef.current) {
+        animationFrameId = requestAnimationFrame(updateScroll);
+        return;
+      }
+
+      // Get current playback time
+      const currentPlayTime = wavesurferRef.current.getCurrentTime();
+      
+      // Calculate the playhead position in pixels
+      const playheadPosition = (currentPlayTime / duration) * duration * zoomLevel;
+      
+      // Get the container width (viewport)
+      const containerWidth = containerRef.current.clientWidth;
+      
+      // Center the playhead in the viewport
+      const targetScrollLeft = Math.max(0, playheadPosition - containerWidth / 2);
+      
+      // Scroll both containers atomically
+      isSyncingScrollRef.current = true;
+      containerRef.current.scrollLeft = targetScrollLeft;
+      noteTrackRef.current.scrollLeft = targetScrollLeft;
+      isSyncingScrollRef.current = false;
+      
+      // Continue animation loop
+      animationFrameId = requestAnimationFrame(updateScroll);
+    };
+    
+    // Start the animation loop
+    animationFrameId = requestAnimationFrame(updateScroll);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+      isAutoScrollingRef.current = false;
+    };
+  }, [isPlaying, autoScroll, zoomLevel, duration, isTypingNote]);
+
+  // Disable autoscroll temporarily when user manually scrolls
+  const handleManualScroll = () => {
+    // Don't disable autoscroll if it's the autoscroll itself that's scrolling
+    if (isAutoScrollingRef.current) return;
+    
+    setAutoScroll(false);
+    
+    // Clear any existing timeout
+    if (autoScrollTimeoutRef.current) {
+      clearTimeout(autoScrollTimeoutRef.current);
+    }
+    
+    // Re-enable autoscroll after 3 seconds of no scrolling
+    autoScrollTimeoutRef.current = setTimeout(() => {
+      setAutoScroll(true);
+    }, 3000);
+  };
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 relative">
       {/* Header */}
@@ -518,16 +636,36 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
       </h2>
 
       {/* Waveform Container */}
-      <div className="mb-6">
+      <div className="mb-2">
         <div
           ref={containerRef}
-          className="bg-gray-50 dark:bg-gray-900 rounded-lg p-1"
+          className="bg-gray-50 dark:bg-gray-900 rounded-lg p-1 hide-scrollbar"
           style={{ 
             height: '258px', // Fixed height: 250px waveform + 8px padding (4px top + 4px bottom)
             minHeight: '258px',
             maxHeight: '258px',
             overflowX: 'auto', // Allow horizontal scroll when zoomed
             overflowY: 'hidden' // Prevent vertical scroll
+          }}
+          onScroll={(e) => {
+            // Skip if autoscrolling or already syncing
+            if (isAutoScrollingRef.current || isSyncingScrollRef.current) return;
+            
+            // Set flag to prevent infinite loop
+            isSyncingScrollRef.current = true;
+            
+            // Sync note track scroll with waveform scroll
+            if (noteTrackRef.current) {
+              noteTrackRef.current.scrollLeft = e.currentTarget.scrollLeft;
+            }
+            
+            // Disable autoscroll when user manually scrolls
+            handleManualScroll();
+            
+            // Reset flag after a short delay
+            setTimeout(() => {
+              isSyncingScrollRef.current = false;
+            }, 0);
           }}
         />
         {isLoading && (
@@ -542,6 +680,120 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
           </div>
         )}
       </div>
+
+      {/* Horizontal Note Track */}
+      {duration > 0 && !isLoading && !error && (
+        <div className="mb-6">
+          <div
+            ref={noteTrackRef}
+            className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2 overflow-x-auto overflow-y-hidden hide-scrollbar"
+            style={{
+              height: '80px',
+              minHeight: '80px',
+              maxHeight: '80px',
+            }}
+            onScroll={(e) => {
+              // Skip if autoscrolling or already syncing
+              if (isAutoScrollingRef.current || isSyncingScrollRef.current) return;
+              
+              // Set flag to prevent infinite loop
+              isSyncingScrollRef.current = true;
+              
+              // Sync waveform scroll with note track scroll
+              if (containerRef.current) {
+                containerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+              }
+              
+              // Disable autoscroll when user manually scrolls
+              handleManualScroll();
+              
+              // Reset flag after a short delay
+              setTimeout(() => {
+                isSyncingScrollRef.current = false;
+              }, 0);
+            }}
+          >
+            <div
+              className="relative h-full"
+              style={{
+                width: zoomLevel > 0 ? `${duration * zoomLevel}px` : '100%',
+                minWidth: '100%'
+              }}
+            >
+              {/* Background grid lines every 5 seconds */}
+              {getNoteTimestamps().map(timestamp => (
+                <div
+                  key={`grid-${timestamp}`}
+                  className="absolute top-0 bottom-0 w-px bg-gray-300 dark:bg-gray-700"
+                  style={{
+                    left: zoomLevel > 0 
+                      ? `${(timestamp / duration) * duration * zoomLevel}px`
+                      : `${(timestamp / duration) * 100}%`
+                  }}
+                >
+                  <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-1 ml-1">
+                    {formatTime(timestamp)}
+                  </div>
+                </div>
+              ))}
+
+              {/* Note inputs at each 5-second mark */}
+              {getNoteTimestamps().map(timestamp => {
+                const hasContent = notes[timestamp]?.trim().length > 0;
+                
+                return (
+                  <div
+                    key={`note-${timestamp}`}
+                    className="absolute top-6"
+                    style={{
+                      left: zoomLevel > 0 
+                        ? `${(timestamp / duration) * duration * zoomLevel}px`
+                        : `${(timestamp / duration) * 100}%`,
+                      width: zoomLevel > 0 
+                        ? `${5 * zoomLevel}px` // 5 seconds width
+                        : `${(5 / duration) * 100}%`,
+                      minWidth: '60px'
+                    }}
+                  >
+                    <input
+                      type="text"
+                      value={notes[timestamp] || ''}
+                      onChange={(e) => handleNoteChange(timestamp, e.target.value)}
+                      onFocus={(e) => {
+                        setIsTypingNote(true);
+                        // Show border when focused
+                        e.currentTarget.classList.remove('border-transparent', 'bg-transparent');
+                        e.currentTarget.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-800');
+                      }}
+                      onBlur={(e) => {
+                        setIsTypingNote(false);
+                        // Hide border if empty
+                        if (!notes[timestamp]?.trim()) {
+                          e.currentTarget.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-800');
+                          e.currentTarget.classList.add('border-transparent', 'bg-transparent');
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === 'Escape') {
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder=""
+                      data-timestamp={timestamp}
+                      className={`w-full px-2 py-1 text-sm rounded text-gray-900 dark:text-gray-100 
+                               focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors
+                               ${hasContent 
+                                 ? 'border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800' 
+                                 : 'border border-transparent bg-transparent cursor-text'}`}
+                    />
+                  </div>
+                );
+              })}
+
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="space-y-4">
@@ -752,6 +1004,7 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
             {zoomLevel === 0 ? "Fit" : `${zoomLevel}px`}
           </span>
         </div>
+
       </div>
 
       {/* Help Modal */}
