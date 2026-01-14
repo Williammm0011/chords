@@ -897,7 +897,7 @@ export default function WavePlayer({
             height: '258px', // Fixed height: 250px waveform + 8px padding (4px top + 4px bottom)
             minHeight: '258px',
             maxHeight: '258px',
-            overflowX: 'hidden', // Hide horizontal scrollbar
+            overflowX: 'auto', // Allow horizontal scrolling but hide scrollbar
             overflowY: 'hidden' // Prevent vertical scroll
           }}
           onScroll={(e) => {
