@@ -20,6 +20,7 @@ export default function Home() {
   const [showFetchBlock, setShowFetchBlock] = useState(true); // Show on initial load
   const [showSaveForm, setShowSaveForm] = useState(false); // Show when save button is clicked
   const [showHelp, setShowHelp] = useState(false); // Help modal state
+  const [showTools, setShowTools] = useState(true); // Show/hide BPM, metronome, offset controls
 
   // Metadata states
   const [title, setTitle] = useState("");
@@ -372,6 +373,23 @@ export default function Home() {
                   </svg>
                 </button>
 
+                {/* Tools Fold/Unfold Button */}
+                <button
+                  onClick={() => setShowTools(prev => !prev)}
+                  className={`p-2.5 rounded-full
+                           bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                           shadow-lg hover:shadow-xl
+                           transition-all duration-200 hover:scale-110
+                           border border-gray-200 dark:border-gray-600
+                           ${showTools ? 'text-blue-600 dark:text-blue-400 hover:bg-white dark:hover:bg-gray-700' : 'text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
+                  title={showTools ? "Hide timing tools" : "Show timing tools"}
+                >
+                  {/* Tool/wrench icon */}
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                  </svg>
+                </button>
+
                 {/* Help Button */}
                 <button
                   onClick={() => setShowHelp(true)}
@@ -422,6 +440,7 @@ export default function Home() {
                 onHelpClose={() => setShowHelp(false)}
                 zoomLevel={zoomLevel}
                 onZoomChange={setZoomLevel}
+                showTimingControls={showTools}
                 initialBpm={bpm}
                 onBpmChange={setBpm}
                 initialOffset={offset}

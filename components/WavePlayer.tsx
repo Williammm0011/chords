@@ -64,6 +64,7 @@ interface WavePlayerProps {
   onHelpClose?: () => void;
   zoomLevel?: number;
   onZoomChange?: (level: number) => void;
+  showTimingControls?: boolean;
   initialBpm?: number | null;
   onBpmChange?: (bpm: number | null) => void;
   initialOffset?: number | null;
@@ -84,6 +85,7 @@ export default function WavePlayer({
   onHelpClose,
   zoomLevel: externalZoomLevel,
   onZoomChange,
+  showTimingControls = true,
   initialBpm,
   onBpmChange,
   initialOffset,
@@ -908,7 +910,7 @@ export default function WavePlayer({
       </div>
 
       {/* Music Timing Controls */}
-      {duration > 0 && !isLoading && !error && (
+      {duration > 0 && !isLoading && !error && showTimingControls && (
         <div className="mb-4 flex items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
             <label htmlFor="bpm" className="text-gray-700 dark:text-gray-300 font-medium">
@@ -1146,7 +1148,6 @@ export default function WavePlayer({
 
               {/* Note inputs at each bar */}
               {getNoteTimestamps().map(timestamp => {
-                const hasContent = notes[timestamp]?.trim().length > 0;
                 const barWidth = getBarWidth();
                 
                 return (
@@ -1169,17 +1170,9 @@ export default function WavePlayer({
                       onChange={(e) => handleNoteChange(timestamp, e.target.value)}
                       onFocus={(e) => {
                         setIsTypingNote(true);
-                        // Show border when focused
-                        e.currentTarget.classList.remove('border-transparent', 'bg-transparent');
-                        e.currentTarget.classList.add('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-800');
                       }}
                       onBlur={(e) => {
                         setIsTypingNote(false);
-                        // Hide border if empty
-                        if (!notes[timestamp]?.trim()) {
-                          e.currentTarget.classList.remove('border-gray-300', 'dark:border-gray-600', 'bg-white', 'dark:bg-gray-800');
-                          e.currentTarget.classList.add('border-transparent', 'bg-transparent');
-                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === 'Escape') {
@@ -1188,11 +1181,10 @@ export default function WavePlayer({
                       }}
                       placeholder=""
                       data-timestamp={timestamp}
-                      className={`w-full px-2 py-1 text-sm rounded text-gray-900 dark:text-gray-100 
-                               focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors
-                               ${hasContent 
-                                 ? 'border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800' 
-                                 : 'border border-transparent bg-transparent cursor-text'}`}
+                      className="w-full px-2 py-1 text-sm rounded text-gray-900 dark:text-gray-100 
+                                 bg-transparent border border-transparent cursor-text
+                                 focus:ring-2 focus:ring-blue-500 focus:border-blue-400 dark:focus:border-blue-400
+                                 transition-colors"
                     />
                   </div>
                 );
