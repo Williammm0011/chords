@@ -26,6 +26,24 @@ export default function Home() {
   const [notes, setNotes] = useState("");
   const [currentSavedId, setCurrentSavedId] = useState<string | null>(null);
   const [showSaveSuccess, setShowSaveSuccess] = useState(false);
+  
+  // Zoom control states
+  const [zoomLevel, setZoomLevel] = useState(27);
+  
+  const handleZoomIn = () => {
+    setZoomLevel(prev => {
+      if (prev === 0) return 5;
+      return Math.min(500, Math.round(prev * 1.3));
+    });
+  };
+  
+  const handleZoomOut = () => {
+    setZoomLevel(prev => {
+      if (prev === 0) return 0;
+      const newZoom = Math.round(prev / 1.3);
+      return newZoom < 5 ? 0 : newZoom;
+    });
+  };
 
   // Validate URL on change
   useEffect(() => {
@@ -273,6 +291,44 @@ export default function Home() {
             <div className="relative">
               {/* Buttons - Top Right */}
               <div className="absolute top-4 right-4 z-20 flex gap-2">
+                {/* Zoom Out Button */}
+                <button
+                  onClick={handleZoomOut}
+                  disabled={zoomLevel === 0}
+                  className="p-2.5 rounded-full
+                           bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                           hover:bg-white dark:hover:bg-gray-700
+                           shadow-lg hover:shadow-xl
+                           transition-all duration-200 hover:scale-110
+                           border border-gray-200 dark:border-gray-600
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Zoom out (−)"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                       className="w-5 h-5 text-gray-600 dark:text-gray-400">
+                    <path fillRule="evenodd" d="M10.5 3.75a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM2.25 10.5a8.25 8.25 0 1114.59 5.28l4.69 4.69a.75.75 0 11-1.06 1.06l-4.69-4.69A8.25 8.25 0 012.25 10.5zm4.5 0a.75.75 0 01.75-.75h6a.75.75 0 010 1.5h-6a.75.75 0 01-.75-.75z" clipRule="evenodd" />
+                  </svg>
+                </button>
+
+                {/* Zoom In Button */}
+                <button
+                  onClick={handleZoomIn}
+                  disabled={zoomLevel >= 500}
+                  className="p-2.5 rounded-full
+                           bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                           hover:bg-white dark:hover:bg-gray-700
+                           shadow-lg hover:shadow-xl
+                           transition-all duration-200 hover:scale-110
+                           border border-gray-200 dark:border-gray-600
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Zoom in (+)"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                       className="w-5 h-5 text-gray-600 dark:text-gray-400">
+                    <path fillRule="evenodd" d="M10.5 3.75a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM2.25 10.5a8.25 8.25 0 1114.59 5.28l4.69 4.69a.75.75 0 11-1.06 1.06l-4.69-4.69A8.25 8.25 0 012.25 10.5zm8.25-3.75a.75.75 0 01.75.75v2.25h2.25a.75.75 0 010 1.5h-2.25v2.25a.75.75 0 01-1.5 0v-2.25H7.5a.75.75 0 010-1.5h2.25V7.5a.75.75 0 01.75-.75z" clipRule="evenodd" />
+                  </svg>
+                </button>
+
                 {/* Help Button */}
                 <button
                   onClick={() => setShowHelp(true)}
@@ -321,6 +377,8 @@ export default function Home() {
                 audioUrl={audioUrl} 
                 showHelp={showHelp}
                 onHelpClose={() => setShowHelp(false)}
+                zoomLevel={zoomLevel}
+                onZoomChange={setZoomLevel}
               />
 
               {/* Success Toast */}

@@ -62,6 +62,8 @@ interface WavePlayerProps {
   audioUrl: string;
   showHelp?: boolean;
   onHelpClose?: () => void;
+  zoomLevel?: number;
+  onZoomChange?: (level: number) => void;
 }
 
 interface Region {
@@ -70,7 +72,7 @@ interface Region {
   end: number;
 }
 
-export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHelpClose }: WavePlayerProps) {
+export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHelpClose, zoomLevel: externalZoomLevel, onZoomChange }: WavePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
@@ -87,7 +89,8 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
-  const [zoomLevel, setZoomLevel] = useState(27); // 0 = fit, 5-500 = px per second (default 27)
+  const [internalZoomLevel, setInternalZoomLevel] = useState(27); // 0 = fit, 5-500 = px per second (default 27)
+  const zoomLevel = externalZoomLevel !== undefined ? externalZoomLevel : internalZoomLevel;
   const [internalShowHelp, setInternalShowHelp] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [dragProgressPercent, setDragProgressPercent] = useState(0);
@@ -309,7 +312,11 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
   };
 
   const handleZoomChange = (newZoom: number) => {
-    setZoomLevel(newZoom);
+    if (onZoomChange) {
+      onZoomChange(newZoom);
+    } else {
+      setInternalZoomLevel(newZoom);
+    }
     if (wavesurferRef.current) {
       wavesurferRef.current.zoom(newZoom);
     }
@@ -687,6 +694,16 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [isDraggingProgress, dragProgressPercent, duration]);
+
+  // Apply zoom level changes to wavesurfer (only after audio is ready)
+  useEffect(() => {
+    if (!wavesurferRef.current) return;
+    if (typeof zoomLevel !== "number") return;
+    if (isLoading || !duration) return;
+
+    // @ts-ignore - zoom is available at runtime even if not in typings
+    wavesurferRef.current.zoom(zoomLevel);
+  }, [zoomLevel, isLoading, duration]);
 
   // Ensure containers stay synced when zoom level changes
   useEffect(() => {
@@ -1230,57 +1247,6 @@ export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHel
               }% - 8px)` 
             }}
           />
-        </div>
-
-        {/* Zoom Controls */}
-        <div className="flex items-center gap-3 pt-2">
-          <div className="flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
-                 className="w-5 h-5 text-gray-600 dark:text-gray-400">
-              <path d="M8.25 10.875a2.625 2.625 0 115.25 0 2.625 2.625 0 01-5.25 0z" />
-              <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm-1.125 4.5a4.125 4.125 0 102.338 7.524l2.007 2.006a.75.75 0 101.06-1.06l-2.006-2.007a4.125 4.125 0 00-3.399-6.463z" clipRule="evenodd" />
-            </svg>
-            <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 w-12">
-              Zoom
-            </span>
-          </div>
-          <button
-            onClick={handleZoomOut}
-            disabled={zoomLevel === 0}
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                     disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
-                     transition-colors duration-200"
-            title="Zoom out (÷1.3)"
-          >
-            −
-          </button>
-          <input
-            type="range"
-            min="0"
-            max="500"
-            step="1"
-            value={zoomLevel}
-            onChange={(e) => handleZoomChange(parseInt(e.target.value))}
-            className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600
-              [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:hover:bg-blue-700
-              [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full 
-              [&::-moz-range-thumb]:bg-blue-600 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
-          />
-          <button
-            onClick={handleZoomIn}
-            disabled={zoomLevel >= 500}
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
-                     disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
-                     transition-colors duration-200"
-            title="Zoom in (×1.3)"
-          >
-            +
-          </button>
-          <span className="text-xs font-mono text-gray-600 dark:text-gray-400 w-12 text-right">
-            {zoomLevel === 0 ? "Fit" : `${zoomLevel}px`}
-          </span>
         </div>
 
       </div>
