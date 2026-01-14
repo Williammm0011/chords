@@ -16,6 +16,11 @@ export default function Home() {
   const [isValid, setIsValid] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // UI state
+  const [showFetchBlock, setShowFetchBlock] = useState(true); // Show on initial load
+  const [showSaveForm, setShowSaveForm] = useState(false); // Show when save button is clicked
+  const [showHelp, setShowHelp] = useState(false); // Help modal state
+
   // Metadata states
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -47,6 +52,7 @@ export default function Home() {
     setLoading(true);
     setAudioUrl(null);
     setCurrentSavedId(null);
+    setShowSaveForm(false);
 
     try {
       // Validate URL (redundant but safe)
@@ -75,6 +81,8 @@ export default function Home() {
       // Set audio URL if ready
       if (data.status === "ready" && data.audioUrl) {
         setAudioUrl(data.audioUrl);
+        setShowFetchBlock(false); // Hide fetch block after successful fetch
+        
         if (data.cached) {
           console.log("✓ Loaded from cache");
         }
@@ -120,8 +128,9 @@ export default function Home() {
       setCurrentSavedId(savedItem.id);
     }
 
-    // Show success message
+    // Show success message and hide form
     setShowSaveSuccess(true);
+    setShowSaveForm(false);
     setTimeout(() => setShowSaveSuccess(false), 3000);
   };
 
@@ -132,9 +141,25 @@ export default function Home() {
     setNotes(item.notes);
     setCurrentSavedId(item.id);
     setSidebarOpen(false);
+    setShowFetchBlock(false); // Hide fetch block when loading saved item
+    setShowSaveForm(false);
 
     // Update last accessed
     updateAudioItem(item.id, {});
+  };
+
+  const handleNewSong = () => {
+    // Reset state and show fetch block
+    setYoutubeUrl("");
+    setAudioUrl(null);
+    setTitle("");
+    setNotes("");
+    setCurrentSavedId(null);
+    setError("");
+    setValidationError("");
+    setShowFetchBlock(true);
+    setShowSaveForm(false);
+    setShowSaveSuccess(false);
   };
 
   return (
@@ -153,156 +178,260 @@ export default function Home() {
             {/* Sidebar Toggle Button */}
             <button
               onClick={() => setSidebarOpen(true)}
-              className="absolute top-0 left-0 p-3 rounded-lg bg-white dark:bg-gray-800 shadow-lg
-                       hover:shadow-xl transition-all duration-200 group"
+              className="absolute top-0 left-0 p-2.5 rounded-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm
+                       hover:bg-white dark:hover:bg-gray-700 transition-all duration-200 group shadow-md"
               aria-label="Open saved audio"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" 
-                   className="w-6 h-6 text-gray-700 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+                   className="w-5 h-5 text-gray-700 dark:text-gray-300">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
               </svg>
             </button>
           </div>
 
-          {/* Input Card */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 mb-8">
-            <div className="space-y-6">
-              <div>
-                <label
-                  htmlFor="youtube-url"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                >
-                  YouTube URL
-                </label>
-                <input
-                  id="youtube-url"
-                  type="text"
-                  value={youtubeUrl}
-                  onChange={(e) => setYoutubeUrl(e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  className={`w-full px-4 py-3 rounded-lg border 
-                           ${validationError && youtubeUrl ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                           bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
-                           focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                           transition-all duration-200`}
-                  disabled={loading}
-                />
-                {validationError && youtubeUrl && (
-                  <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-                    {validationError}
-                  </p>
-                )}
-              </div>
+          {/* Fetch URL Block - Show on initial load and when "New Song" is clicked */}
+          {showFetchBlock && (
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 mb-8">
+              <div className="space-y-6">
+                <div>
+                  <label
+                    htmlFor="youtube-url"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                  >
+                    YouTube URL
+                  </label>
+                  <input
+                    id="youtube-url"
+                    type="text"
+                    value={youtubeUrl}
+                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className={`w-full px-4 py-3 rounded-lg border 
+                             ${validationError && youtubeUrl ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}
+                             bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                             focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                             transition-all duration-200`}
+                    disabled={loading}
+                  />
+                  {validationError && youtubeUrl && (
+                    <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                      {validationError}
+                    </p>
+                  )}
+                </div>
 
-              {error && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                  <div className="flex items-start gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" 
-                         className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                    </svg>
-                    <div>
-                      <p className="text-sm font-semibold text-red-900 dark:text-red-200">
-                        Error
-                      </p>
-                      <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-                        {error}
-                      </p>
+                {error && (
+                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                    <div className="flex items-start gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" 
+                           className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                      </svg>
+                      <div>
+                        <p className="text-sm font-semibold text-red-900 dark:text-red-200">
+                          Error
+                        </p>
+                        <p className="text-sm text-red-700 dark:text-red-300 mt-1">
+                          {error}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {loading && (
-                <div className="flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                  <svg className="animate-spin h-5 w-5 text-blue-600 dark:text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                {loading && (
+                  <div className="flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <svg className="animate-spin h-5 w-5 text-blue-600 dark:text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span className="text-sm text-blue-700 dark:text-blue-300">
+                      Downloading and converting audio... This may take up to 2 minutes.
+                    </span>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleFetchAudio}
+                  disabled={loading || !isValid}
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 
+                           hover:from-blue-700 hover:to-purple-700
+                           disabled:from-gray-400 disabled:to-gray-400
+                           text-white font-semibold py-3 px-6 rounded-lg
+                           transition-all duration-200 transform hover:scale-[1.02]
+                           disabled:cursor-not-allowed disabled:transform-none
+                           shadow-lg hover:shadow-xl"
+                >
+                  {loading ? "Fetching..." : "Fetch Audio"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Audio Player with Waveform */}
+          {audioUrl && (
+            <div className="relative">
+              {/* Buttons - Top Right */}
+              <div className="absolute top-4 right-4 z-20 flex gap-2">
+                {/* Help Button */}
+                <button
+                  onClick={() => setShowHelp(true)}
+                  className="p-2.5 rounded-full
+                           bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                           hover:bg-white dark:hover:bg-gray-700
+                           shadow-lg hover:shadow-xl
+                           transition-all duration-200 hover:scale-110
+                           border border-gray-200 dark:border-gray-600"
+                  title="Keyboard shortcuts (? or H)"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                       className="w-5 h-5 text-gray-600 dark:text-gray-400">
+                    <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm11.378-3.917c-.89-.777-2.366-.777-3.255 0a.75.75 0 01-.988-1.129c1.454-1.272 3.776-1.272 5.23 0 1.513 1.324 1.513 3.518 0 4.842a3.75 3.75 0 01-.837.552c-.676.328-1.028.774-1.028 1.152v.75a.75.75 0 01-1.5 0v-.75c0-1.279 1.06-2.107 1.875-2.502.182-.088.351-.199.503-.331.83-.727.83-1.857 0-2.584zM12 18a.75.75 0 100-1.5.75.75 0 000 1.5z" clipRule="evenodd" />
                   </svg>
-                  <span className="text-sm text-blue-700 dark:text-blue-300">
-                    Downloading and converting audio... This may take up to 2 minutes.
-                  </span>
-                </div>
-              )}
+                </button>
 
-              <button
-                onClick={handleFetchAudio}
-                disabled={loading || !isValid}
-                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 
-                         hover:from-blue-700 hover:to-purple-700
-                         disabled:from-gray-400 disabled:to-gray-400
-                         text-white font-semibold py-3 px-6 rounded-lg
-                         transition-all duration-200 transform hover:scale-[1.02]
-                         disabled:cursor-not-allowed disabled:transform-none
-                         shadow-lg hover:shadow-xl"
-              >
-                {loading ? "Fetching..." : "Fetch Audio"}
-              </button>
-
-              {/* Metadata Form (shown after audio is loaded) */}
-              {audioUrl && (
-                <div className="pt-6 border-t border-gray-200 dark:border-gray-700 space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                    Save This Audio
-                  </h3>
-
-                  <div>
-                    <label htmlFor="title" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Title
-                    </label>
-                    <input
-                      id="title"
-                      type="text"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder="e.g., Guitar Solo Practice"
-                      className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600
-                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
-                               focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Notes (optional)
-                    </label>
-                    <textarea
-                      id="notes"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      placeholder="Add any notes about this audio..."
-                      rows={3}
-                      className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600
-                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
-                               focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleSave}
-                    className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg
-                             transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                {/* Save Button */}
+                <button
+                  onClick={() => setShowSaveForm(true)}
+                  className="p-2.5 rounded-full
+                           bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                           hover:bg-white dark:hover:bg-gray-700
+                           shadow-lg hover:shadow-xl
+                           transition-all duration-200 hover:scale-110
+                           border border-gray-200 dark:border-gray-600"
+                  title={currentSavedId ? "Edit saved track" : "Save track"}
+                >
+                  {currentSavedId ? (
+                    // Filled bookmark - saved
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                         className="w-5 h-5 text-gray-600 dark:text-gray-400">
+                      <path fillRule="evenodd" d="M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    // Outline bookmark - not saved
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" 
+                         className="w-5 h-5 text-gray-500 dark:text-gray-500">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
                     </svg>
-                    {currentSavedId ? "Update Saved Audio" : "Save Audio"}
-                  </button>
-
-                  {showSaveSuccess && (
-                    <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg text-center">
-                      <p className="text-sm text-green-700 dark:text-green-300 font-medium">
-                        ✓ Saved successfully!
-                      </p>
-                    </div>
                   )}
+                </button>
+              </div>
+
+              <WavePlayer 
+                audioUrl={audioUrl} 
+                showHelp={showHelp}
+                onHelpClose={() => setShowHelp(false)}
+              />
+
+              {/* Success Toast */}
+              {showSaveSuccess && (
+                <div className="fixed bottom-8 right-8 z-40 animate-in slide-in-from-bottom-5 fade-in duration-300">
+                  <div className="px-6 py-4 bg-green-600 text-white rounded-full shadow-2xl flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                      <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium">Saved successfully!</span>
+                  </div>
                 </div>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Audio Player with Waveform */}
-          {audioUrl && <WavePlayer audioUrl={audioUrl} />}
+          {/* Save Modal */}
+          {showSaveForm && (
+            <>
+              {/* Overlay */}
+              <div
+                className="fixed inset-0 bg-black bg-opacity-60 z-40 backdrop-blur-sm animate-in fade-in duration-200"
+                onClick={() => setShowSaveForm(false)}
+              />
+              
+              {/* Modal */}
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in zoom-in-95 fade-in duration-200">
+                <div
+                  className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                      {currentSavedId ? "Edit Track" : "Save Track"}
+                    </h3>
+                    <button
+                      onClick={() => setShowSaveForm(false)}
+                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-500 dark:text-gray-400"
+                      aria-label="Close"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Form */}
+                  <div className="space-y-4">
+                    <div>
+                      <label htmlFor="title" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Title
+                      </label>
+                      <input
+                        id="title"
+                        type="text"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="e.g., Guitar Solo Practice"
+                        className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600
+                                 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                                 focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                                 transition-all duration-200"
+                        autoFocus
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Notes (optional)
+                      </label>
+                      <textarea
+                        id="notes"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="Add any notes about this track..."
+                        rows={4}
+                        className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600
+                                 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                                 focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none
+                                 transition-all duration-200"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      onClick={handleSave}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg
+                               transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                        <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                      </svg>
+                      {currentSavedId ? "Update" : "Save"}
+                    </button>
+                    <button
+                      onClick={() => setShowSaveForm(false)}
+                      className="px-6 py-3 rounded-lg font-semibold
+                               bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600
+                               text-gray-800 dark:text-gray-100
+                               transition-all duration-200"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -311,6 +440,7 @@ export default function Home() {
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
         onLoadItem={handleLoadSavedItem}
+        onNewSong={handleNewSong}
       />
     </div>
   );

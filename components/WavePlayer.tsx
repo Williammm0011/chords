@@ -26,24 +26,33 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
  * 
  * KEYBOARD SHORTCUTS:
  * - Space: Play/Pause
+ * - ← / →: Skip backward/forward 5 seconds
+ * - + / =: Zoom in (×1.3, starts at 5px/second)
+ * - -: Zoom out (÷1.3)
  * - Esc: Clear region selection
+ * - ? / H: Show keyboard shortcuts help
  * 
  * PRACTICE WORKFLOW:
  * 1. Load your YouTube video
  * 2. Click and drag on the waveform to select a difficult section
  * 3. The audio will automatically loop that section
  * 4. Use "Replay" to restart from the beginning of the region
- * 5. Adjust region by dragging its edges
- * 6. Press Esc to clear and select a new region
+ * 5. Use ← / → to fine-tune your position
+ * 6. Adjust region by dragging its edges
+ * 7. Press Esc to clear and select a new region
  * 
  * TIPS:
  * - Shorter loops (2-5 seconds) work best for practice
  * - Zoom in for precise region selection
+ * - Use skip buttons for quick navigation
  * - The looping is seamless with no gaps
+ * - Press ? or H to see all keyboard shortcuts
  */
 
 interface WavePlayerProps {
   audioUrl: string;
+  showHelp?: boolean;
+  onHelpClose?: () => void;
 }
 
 interface Region {
@@ -52,7 +61,7 @@ interface Region {
   end: number;
 }
 
-export default function WavePlayer({ audioUrl }: WavePlayerProps) {
+export default function WavePlayer({ audioUrl, showHelp: externalShowHelp, onHelpClose }: WavePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
@@ -65,6 +74,26 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
   const [error, setError] = useState<string | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = default fit, higher = more zoomed
+  const [internalShowHelp, setInternalShowHelp] = useState(false);
+  
+  // Use external control if provided, otherwise use internal state
+  const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
+  const handleHelpClose = () => {
+    if (onHelpClose) {
+      onHelpClose();
+    } else {
+      setInternalShowHelp(false);
+    }
+  };
+  const handleHelpOpen = () => {
+    if (externalShowHelp !== undefined && onHelpClose) {
+      // If externally controlled, we can't open it directly, but we shouldn't be here
+      // This is for keyboard shortcuts - they should work
+      setInternalShowHelp(true);
+    } else {
+      setInternalShowHelp(true);
+    }
+  };
 
   // Use refs to store latest state for the interval (avoid stale closure)
   const currentRegionRef = useRef<Region | null>(null);
@@ -255,6 +284,33 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
     }
   };
 
+  const handleZoomIn = () => {
+    let newZoom: number;
+    if (zoomLevel === 0) {
+      // From Fit to first zoom level
+      newZoom = 5;
+    } else {
+      // Multiply by 1.3
+      newZoom = Math.min(500, Math.round(zoomLevel * 1.3));
+    }
+    handleZoomChange(newZoom);
+  };
+
+  const handleZoomOut = () => {
+    if (zoomLevel === 0) return;
+    
+    let newZoom: number;
+    // Divide by 1.3
+    newZoom = Math.round(zoomLevel / 1.3);
+    
+    // If less than 5, go back to Fit
+    if (newZoom < 5) {
+      newZoom = 0;
+    }
+    
+    handleZoomChange(newZoom);
+  };
+
   const handleClearRegion = () => {
     if (regionsPluginRef.current) {
       regionsPluginRef.current.clearRegions();
@@ -273,6 +329,21 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
       wavesurferRef.current.setTime(0);
     }
     wavesurferRef.current.play();
+  };
+
+  const handleSkipBackward = () => {
+    if (!wavesurferRef.current) return;
+    const current = wavesurferRef.current.getCurrentTime();
+    const newTime = Math.max(0, current - 5);
+    wavesurferRef.current.setTime(newTime);
+  };
+
+  const handleSkipForward = () => {
+    if (!wavesurferRef.current) return;
+    const current = wavesurferRef.current.getCurrentTime();
+    const total = wavesurferRef.current.getDuration();
+    const newTime = Math.min(total, current + 5);
+    wavesurferRef.current.setTime(newTime);
   };
 
   const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -344,15 +415,52 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
           e.preventDefault();
           handleClearRegion();
           break;
+        case "ArrowLeft": // Left arrow - skip backward 5s
+          e.preventDefault();
+          handleSkipBackward();
+          break;
+        case "ArrowRight": // Right arrow - skip forward 5s
+          e.preventDefault();
+          handleSkipForward();
+          break;
+        case "-": // Minus - zoom out
+        case "_": // Underscore (shift + minus on some keyboards)
+          e.preventDefault();
+          handleZoomOut();
+          break;
+        case "=": // Equals - zoom in (same key as + without shift)
+        case "+": // Plus (shift + equals)
+          e.preventDefault();
+          handleZoomIn();
+          break;
+        case "?": // Question mark - show help
+        case "h": // H - show help
+        case "H": // Shift + H
+          e.preventDefault();
+          handleHelpOpen();
+          break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentRegion]); // Re-attach when region changes
+  }, [currentRegion, zoomLevel]); // Re-attach when region or zoom changes
+
+  // Pause playback when tab is not visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && wavesurferRef.current && isPlaying) {
+        wavesurferRef.current.pause();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isPlaying]);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
+    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 relative">
+      {/* Header */}
       <h2 className="text-2xl font-semibold mb-6 text-gray-800 dark:text-gray-100">
         Audio Player
       </h2>
@@ -404,6 +512,23 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
             </svg>
           </button>
 
+          {/* Skip Backward Button */}
+          <button
+            onClick={handleSkipBackward}
+            disabled={isLoading || !!error}
+            className="flex items-center justify-center w-10 h-10 rounded-full 
+                     bg-gray-100 dark:bg-gray-700/50 
+                     hover:bg-gray-200 dark:hover:bg-gray-600
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     text-gray-600 dark:text-gray-300
+                     transition-all duration-200 transform hover:scale-105"
+            title="Skip backward 5s (←)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+              <path d="M9.195 18.44c1.25.713 2.805-.19 2.805-1.629v-2.34l6.945 3.968c1.25.714 2.805-.188 2.805-1.628V8.688c0-1.44-1.555-2.342-2.805-1.628L12 11.03v-2.34c0-1.44-1.555-2.343-2.805-1.629l-7.108 4.062c-1.26.72-1.26 2.536 0 3.256l7.108 4.061z" />
+            </svg>
+          </button>
+
           {/* Play/Pause Button */}
           <button
             onClick={handlePlayPause}
@@ -445,6 +570,23 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
             )}
           </button>
 
+          {/* Skip Forward Button */}
+          <button
+            onClick={handleSkipForward}
+            disabled={isLoading || !!error}
+            className="flex items-center justify-center w-10 h-10 rounded-full 
+                     bg-gray-100 dark:bg-gray-700/50 
+                     hover:bg-gray-200 dark:hover:bg-gray-600
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     text-gray-600 dark:text-gray-300
+                     transition-all duration-200 transform hover:scale-105"
+            title="Skip forward 5s (→)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+              <path d="M5.055 7.06c-1.25-.714-2.805.189-2.805 1.628v8.123c0 1.44 1.555 2.342 2.805 1.628L12 14.471v2.34c0 1.44 1.555 2.342 2.805 1.628l7.108-4.061c1.26-.72 1.26-2.536 0-3.256L14.805 7.06C13.555 6.346 12 7.25 12 8.688v2.34L5.055 7.06z" />
+            </svg>
+          </button>
+
           {/* Cancel/Clear Region Button */}
           <button
             onClick={handleClearRegion}
@@ -456,7 +598,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
                      text-gray-700 dark:text-gray-200
                      hover:text-red-600 dark:hover:text-red-400
                      transition-all duration-200 transform hover:scale-105"
-            title="Clear region"
+            title="Clear region (Esc)"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
               <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 011.06 0L12 10.94l5.47-5.47a.75.75 0 111.06 1.06L13.06 12l5.47 5.47a.75.75 0 11-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 01-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 010-1.06z" clipRule="evenodd" />
@@ -506,12 +648,12 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
             </span>
           </div>
           <button
-            onClick={() => handleZoomChange(Math.max(0, zoomLevel - 50))}
+            onClick={handleZoomOut}
             disabled={zoomLevel === 0}
             className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
                      disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
                      transition-colors duration-200"
-            title="Zoom out"
+            title="Zoom out (÷1.3)"
           >
             −
           </button>
@@ -519,7 +661,7 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
             type="range"
             min="0"
             max="500"
-            step="10"
+            step="1"
             value={zoomLevel}
             onChange={(e) => handleZoomChange(parseInt(e.target.value))}
             className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer
@@ -530,12 +672,12 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
               [&::-moz-range-thumb]:bg-blue-600 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
           />
           <button
-            onClick={() => handleZoomChange(Math.min(500, zoomLevel + 50))}
+            onClick={handleZoomIn}
             disabled={zoomLevel >= 500}
             className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600
                      disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold
                      transition-colors duration-200"
-            title="Zoom in"
+            title="Zoom in (×1.3)"
           >
             +
           </button>
@@ -543,58 +685,147 @@ export default function WavePlayer({ audioUrl }: WavePlayerProps) {
             {zoomLevel === 0 ? "Fit" : `${zoomLevel}px`}
           </span>
         </div>
+      </div>
 
-        {/* Region Controls (shown only when region exists) */}
-        {currentRegion && (
-          <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-green-600">
-                <path d="M5.055 7.06C3.805 6.347 2.25 7.25 2.25 8.69v8.122c0 1.44 1.555 2.343 2.805 1.628l7.108-4.061c1.26-.72 1.26-2.536 0-3.256L5.055 7.061zM12.75 8.69c0-1.44 1.555-2.343 2.805-1.628l7.108 4.061c1.26.72 1.26 2.536 0 3.256l-7.108 4.061c-1.25.714-2.805-.189-2.805-1.628V8.69z" />
-              </svg>
-              Loop Region Active
-            </h3>
-            
-            {/* Region Timestamps */}
-            <div className="flex items-center justify-between text-sm bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Start:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
-                  {formatTime(currentRegion.start)}
-                </span>
-              </div>
-              <div className="text-green-600 dark:text-green-400">→</div>
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">End:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
-                  {formatTime(currentRegion.end)}
-                </span>
-              </div>
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Duration:</span>
-                <span className="ml-2 font-mono text-gray-900 dark:text-gray-100 font-semibold">
-                  {formatTime(currentRegion.end - currentRegion.start)}
-                </span>
-              </div>
+      {/* Help Modal */}
+      {showHelp && (
+        <div 
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={handleHelpClose}
+        >
+          <div 
+            className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <h3 className="text-xl font-bold">Keyboard Shortcuts</h3>
+              <button
+                onClick={handleHelpClose}
+                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+                  <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 011.06 0L12 10.94l5.47-5.47a.75.75 0 111.06 1.06L13.06 12l5.47 5.47a.75.75 0 11-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 01-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 010-1.06z" clipRule="evenodd" />
+                </svg>
+              </button>
             </div>
 
-          </div>
-        )}
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Playback Section */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-blue-600">
+                    <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
+                  </svg>
+                  Playback Controls
+                </h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Play / Pause</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      Space
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Skip backward 5 seconds</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      ←
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Skip forward 5 seconds</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      →
+                    </kbd>
+                  </div>
+                </div>
+              </div>
 
-        {/* Instructions */}
-        <div className="text-xs text-center text-gray-500 dark:text-gray-400 mt-4 space-y-1">
-          {!currentRegion ? (
-            <>
-              <p className="font-semibold">Drag on waveform to create a loop region</p>
-              <p>Click progress bar to seek • Space: play/pause</p>
-            </>
-          ) : (
-            <>
-              <p className="font-semibold">🔁 Looping active • Adjust region by dragging its edges</p>
-              <p>Space: play/pause • Esc: clear region</p>
-            </>
-          )}
+              {/* Region Controls Section */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-purple-600">
+                    <path fillRule="evenodd" d="M5.625 1.5c-1.036 0-1.875.84-1.875 1.875v17.25c0 1.035.84 1.875 1.875 1.875h12.75c1.035 0 1.875-.84 1.875-1.875V12.75A3.75 3.75 0 0016.5 9h-1.875a1.875 1.875 0 01-1.875-1.875V5.25A3.75 3.75 0 009 1.5H5.625zM7.5 15a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5A.75.75 0 017.5 15zm.75 2.25a.75.75 0 000 1.5H12a.75.75 0 000-1.5H8.25z" clipRule="evenodd" />
+                    <path d="M12.971 1.816A5.23 5.23 0 0114.25 5.25v1.875c0 .207.168.375.375.375H16.5a5.23 5.23 0 013.434 1.279 9.768 9.768 0 00-6.963-6.963z" />
+                  </svg>
+                  Loop Region
+                </h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Clear region selection</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      Esc
+                    </kbd>
+                  </div>
+                </div>
+              </div>
+
+              {/* Zoom Controls Section */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-green-600">
+                    <path d="M8.25 10.875a2.625 2.625 0 115.25 0 2.625 2.625 0 01-5.25 0z" />
+                    <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm-1.125 4.5a4.125 4.125 0 102.338 7.524l2.007 2.006a.75.75 0 101.06-1.06l-2.006-2.007a4.125 4.125 0 00-3.399-6.463z" clipRule="evenodd" />
+                  </svg>
+                  Zoom
+                </h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Zoom in (×1.3)</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      + / =
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Zoom out (÷1.3)</span>
+                    <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                      -
+                    </kbd>
+                  </div>
+                </div>
+              </div>
+
+              {/* Help Section */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-orange-600">
+                    <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm11.378-3.917c-.89-.777-2.366-.777-3.255 0a.75.75 0 01-.988-1.129c1.454-1.272 3.776-1.272 5.23 0 1.513 1.324 1.513 3.518 0 4.842a3.75 3.75 0 01-.837.552c-.676.328-1.028.774-1.028 1.152v.75a.75.75 0 01-1.5 0v-.75c0-1.279 1.06-2.107 1.875-2.502.182-.088.351-.199.503-.331.83-.727.83-1.857 0-2.584zM12 18a.75.75 0 100-1.5.75.75 0 000 1.5z" clipRule="evenodd" />
+                  </svg>
+                  Help
+                </h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <span className="text-gray-700 dark:text-gray-200">Show this help dialog</span>
+                    <div className="flex gap-2">
+                      <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                        ?
+                      </kbd>
+                      <span className="text-gray-400">or</span>
+                      <kbd className="px-3 py-1 bg-white dark:bg-gray-600 rounded-md text-sm font-mono border border-gray-300 dark:border-gray-500 shadow-sm">
+                        H
+                      </kbd>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tips */}
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">💡 Tips</h4>
+                <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
+                  <li>Drag on the waveform to create a loop region</li>
+                  <li>Click and drag region edges to adjust boundaries</li>
+                  <li>Click anywhere on the progress bar to seek</li>
+                  <li>Zoom grows exponentially: 5px → 7px → 9px → 12px → 15px...</li>
+                  <li>Higher zoom = more detail for precise region selection</li>
+                </ul>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
