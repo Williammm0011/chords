@@ -45,5 +45,21 @@ body {
   .hide-scrollbar *::-webkit-scrollbar {
     display: none;  /* Chrome, Safari, Opera */
   }
+  
+  /* Animation for tab editor block */
+  @keyframes slideDownFadeIn {
+    0% {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .animate-slide-down-fade-in {
+    animation: slideDownFadeIn 0.3s ease-out;
+  }
 }
 

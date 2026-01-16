@@ -1818,7 +1818,9 @@ export default function WavePlayer({
       {tabEditorOpen && editingBarTimestamp !== null && (() => {
         const guitarStrings = ['E', 'B', 'G', 'D', 'A', 'E']; // Standard tuning from high to low
         return (
-          <div className="mt-4 mb-8 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-300 dark:border-gray-700">
+          <div 
+            className="mt-4 mb-8 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-300 dark:border-gray-700
+                       animate-slide-down-fade-in">
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
