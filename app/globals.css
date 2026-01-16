@@ -46,20 +46,25 @@ body {
     display: none;  /* Chrome, Safari, Opera */
   }
   
-  /* Animation for tab editor block */
+  /* Animation for tab editor block - optimized for performance */
   @keyframes slideDownFadeIn {
     0% {
       opacity: 0;
-      transform: translateY(-10px);
+      transform: translate3d(0, -10px, 0);
     }
     100% {
       opacity: 1;
-      transform: translateY(0);
+      transform: translate3d(0, 0, 0);
     }
   }
   
   .animate-slide-down-fade-in {
-    animation: slideDownFadeIn 0.3s ease-out;
+    animation: slideDownFadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform, opacity;
+  }
+  
+  .animate-slide-down-fade-in * {
+    will-change: auto;
   }
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 
@@ -111,6 +111,8 @@ export default function WavePlayer({
   const autoScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isAutoScrollingRef = useRef<boolean>(false); // Flag to prevent scroll event from disabling autoscroll
   const isSyncingScrollRef = useRef<boolean>(false); // Flag to prevent infinite scroll sync loops
+  const scrollUpdateFrameRef = useRef<number | null>(null); // Track pending scroll updates for throttling
+  const debouncedHandleManualScrollRef = useRef<NodeJS.Timeout | null>(null); // Debounce manual scroll handler
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -153,6 +155,8 @@ export default function WavePlayer({
   const [showGuitarTab, setShowGuitarTab] = useState(false); // Show/hide guitar tab
   const [tabEditorOpen, setTabEditorOpen] = useState(false); // Show/hide tab editor side window
   const [editingBarTimestamp, setEditingBarTimestamp] = useState<number | null>(null); // Which bar is being edited
+  const [tabScrollLeft, setTabScrollLeft] = useState(0); // Track tab scroll position for viewport culling
+  const [tabContainerWidth, setTabContainerWidth] = useState(0); // Track tab container width for viewport culling
   // Tab data structure: `${timestamp}-${stringIndex}` -> string[] (array of note values per position)
   const [tabData, setTabData] = useState<Record<string, string[]>>(() => {
     if (!initialTabData) return {};
@@ -215,14 +219,39 @@ export default function WavePlayer({
       const converted: Record<string, string[]> = {};
       for (const [key, value] of Object.entries(initialTabData)) {
         if (typeof value === 'string') {
-          // For string format, we can't preserve positions, so we'll just initialize empty
-          // The user will need to re-enter data, but at least we won't corrupt existing edits
-          const slotsPerBar = getSlotsPerBar();
-          const emptyArray: string[] = [];
-          for (let i = 0; i < slotsPerBar; i++) {
-            emptyArray.push('');
+          // Try to parse as JSON first (new format with position preservation)
+          try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) {
+              // It's a JSON-encoded array, use it directly
+              const slotsPerBar = getSlotsPerBar();
+              const arr: string[] = [...parsed] as string[];
+              while (arr.length < slotsPerBar) {
+                arr.push('');
+              }
+              if (arr.length > slotsPerBar) {
+                arr.length = slotsPerBar;
+              }
+              converted[key] = arr;
+            } else {
+              // Not an array, treat as old format (legacy)
+              const slotsPerBar = getSlotsPerBar();
+              const emptyArray: string[] = [];
+              for (let i = 0; i < slotsPerBar; i++) {
+                emptyArray.push('');
+              }
+              converted[key] = emptyArray;
+            }
+          } catch {
+            // Not valid JSON, treat as old format (legacy string)
+            // Old format can't preserve positions, so initialize empty
+            const slotsPerBar = getSlotsPerBar();
+            const emptyArray: string[] = [];
+            for (let i = 0; i < slotsPerBar; i++) {
+              emptyArray.push('');
+            }
+            converted[key] = emptyArray;
           }
-          converted[key] = emptyArray;
         } else if (Array.isArray(value)) {
           // If it's already an array, ensure it has the correct length
           const slotsPerBar = getSlotsPerBar();
@@ -307,10 +336,16 @@ export default function WavePlayer({
     }
     
     tabDataTimeoutRef.current = setTimeout(() => {
-      // Convert to old format for compatibility (flatten arrays to strings)
+      // Convert arrays to JSON strings to preserve position information
+      // This allows us to store the full array structure while maintaining string format compatibility
       const oldFormat: Record<string, string> = {};
       for (const [k, v] of Object.entries(tabData)) {
-        oldFormat[k] = Array.isArray(v) ? v.join('') : String(v);
+        if (Array.isArray(v)) {
+          // Store as JSON to preserve positions and empty slots
+          oldFormat[k] = JSON.stringify(v);
+        } else {
+          oldFormat[k] = String(v);
+        }
       }
       onTabChange(oldFormat);
     }, 100);
@@ -860,6 +895,21 @@ export default function WavePlayer({
   const getSlotsPerBar = (): number => {
     return beatsPerBar > 0 ? beatsPerBar * 4 : 16; // Default to 16 if beatsPerBar is 0
   };
+
+  // Calculate visible bars based on viewport (for viewport-based rendering)
+  const getVisibleBars = (timestamps: number[], scrollLeft: number, containerWidth: number): number[] => {
+    if (zoomLevel === 0 || timestamps.length === 0) return timestamps;
+    
+    const startTime = scrollLeft / zoomLevel;
+    const endTime = (scrollLeft + containerWidth) / zoomLevel;
+    const barWidth = getBarWidth();
+    const padding = barWidth * 2; // Render 2 extra bars on each side for smooth scrolling
+    
+    return timestamps.filter(
+      (timestamp) =>
+        timestamp >= startTime - padding && timestamp <= endTime + padding
+    );
+  };
   
   // Get the currently playing bar timestamp
   const getCurrentBarTimestamp = (): number | null => {
@@ -1034,10 +1084,7 @@ export default function WavePlayer({
       if (containerRef.current && noteTrackRef.current) {
         // Use waveform as source of truth
         const scrollLeft = containerRef.current.scrollLeft;
-        noteTrackRef.current.scrollLeft = scrollLeft;
-        if (guitarTabRef.current) {
-          guitarTabRef.current.scrollLeft = scrollLeft;
-        }
+        handleScrollSync(scrollLeft);
       }
     };
     
@@ -1046,6 +1093,83 @@ export default function WavePlayer({
     
     return () => clearTimeout(timeoutId);
   }, [zoomLevel]);
+
+  // Track tab container width for viewport culling
+  useEffect(() => {
+    if (!showGuitarTab || !guitarTabRef.current) return;
+
+    const updateWidth = () => {
+      if (guitarTabRef.current) {
+        setTabContainerWidth(guitarTabRef.current.clientWidth);
+      }
+    };
+
+    // Initial width
+    updateWidth();
+
+    // Update on resize
+    const resizeObserver = new ResizeObserver(updateWidth);
+    if (guitarTabRef.current) {
+      resizeObserver.observe(guitarTabRef.current);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [showGuitarTab]);
+
+  // Handle Escape key to close tab editor
+  useEffect(() => {
+    if (!tabEditorOpen) return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && tabEditorOpen) {
+        setTabEditorOpen(false);
+        setEditingBarTimestamp(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [tabEditorOpen]);
+
+  // Add passive scroll event listeners for better browser optimization
+  useEffect(() => {
+    const containers = [
+      { ref: containerRef, name: 'waveform' },
+      { ref: noteTrackRef, name: 'noteTrack' },
+      { ref: guitarTabRef, name: 'guitarTab' }
+    ];
+
+    const passiveListeners: Array<{ element: HTMLElement; handler: (e: Event) => void }> = [];
+
+    containers.forEach(({ ref, name }) => {
+      const element = ref.current;
+      if (!element) return;
+
+      const handler = (e: Event) => {
+        const target = e.target as HTMLElement;
+        if (target.scrollLeft !== undefined) {
+          // Update tab scroll position for viewport culling if it's the guitar tab
+          if (name === 'guitarTab') {
+            setTabScrollLeft(target.scrollLeft);
+          }
+        }
+      };
+
+      // Add passive listener for scroll optimization
+      element.addEventListener('scroll', handler, { passive: true });
+      passiveListeners.push({ element, handler });
+    });
+
+    return () => {
+      passiveListeners.forEach(({ element, handler }) => {
+        element.removeEventListener('scroll', handler);
+      });
+    };
+  }, [showGuitarTab]);
 
   // Smooth autoscroll waveform and note track during playback
   useEffect(() => {
@@ -1104,22 +1228,49 @@ export default function WavePlayer({
     };
   }, [isPlaying, autoScroll, zoomLevel, duration, isTypingNote]);
 
-  // Disable autoscroll temporarily when user manually scrolls
+  // Throttled scroll sync using requestAnimationFrame
+  const handleScrollSync = (scrollLeft: number) => {
+    if (scrollUpdateFrameRef.current !== null) return;
+    
+    scrollUpdateFrameRef.current = requestAnimationFrame(() => {
+      // Batch all scroll updates here
+      if (containerRef.current) {
+        containerRef.current.scrollLeft = scrollLeft;
+      }
+      if (noteTrackRef.current) {
+        noteTrackRef.current.scrollLeft = scrollLeft;
+      }
+      if (guitarTabRef.current) {
+        guitarTabRef.current.scrollLeft = scrollLeft;
+      }
+      scrollUpdateFrameRef.current = null;
+    });
+  };
+
+  // Debounced manual scroll handler to prevent excessive state updates
   const handleManualScroll = () => {
     // Don't disable autoscroll if it's the autoscroll itself that's scrolling
     if (isAutoScrollingRef.current) return;
     
-    setAutoScroll(false);
-    
-    // Clear any existing timeout
-    if (autoScrollTimeoutRef.current) {
-      clearTimeout(autoScrollTimeoutRef.current);
+    // Clear any existing debounce timeout
+    if (debouncedHandleManualScrollRef.current) {
+      clearTimeout(debouncedHandleManualScrollRef.current);
     }
     
-    // Re-enable autoscroll after 3 seconds of no scrolling
-    autoScrollTimeoutRef.current = setTimeout(() => {
-      setAutoScroll(true);
-    }, 3000);
+    // Debounce the state update
+    debouncedHandleManualScrollRef.current = setTimeout(() => {
+      setAutoScroll(false);
+      
+      // Clear any existing timeout
+      if (autoScrollTimeoutRef.current) {
+        clearTimeout(autoScrollTimeoutRef.current);
+      }
+      
+      // Re-enable autoscroll after 3 seconds of no scrolling
+      autoScrollTimeoutRef.current = setTimeout(() => {
+        setAutoScroll(true);
+      }, 3000);
+    }, 300);
   };
 
   return (
@@ -1155,10 +1306,10 @@ export default function WavePlayer({
             // Set flag to prevent infinite loop
             isSyncingScrollRef.current = true;
             
-            // Sync note track scroll with waveform scroll
-            if (noteTrackRef.current) {
-              noteTrackRef.current.scrollLeft = e.currentTarget.scrollLeft;
-            }
+            const scrollLeft = e.currentTarget.scrollLeft;
+            
+            // Use throttled scroll sync
+            handleScrollSync(scrollLeft);
             
             // Disable autoscroll when user manually scrolls
             handleManualScroll();
@@ -1355,14 +1506,10 @@ export default function WavePlayer({
               // Set flag to prevent infinite loop
               isSyncingScrollRef.current = true;
               
-              // Sync waveform, note track, and guitar tab scrolls
               const scrollLeft = e.currentTarget.scrollLeft;
-              if (containerRef.current) {
-                containerRef.current.scrollLeft = scrollLeft;
-              }
-              if (guitarTabRef.current) {
-                guitarTabRef.current.scrollLeft = scrollLeft;
-              }
+              
+              // Use throttled scroll sync
+              handleScrollSync(scrollLeft);
               
               // Disable autoscroll when user manually scrolls
               handleManualScroll();
@@ -1529,6 +1676,20 @@ export default function WavePlayer({
         const alignmentOffset = 8;
         const guitarStrings = ['E', 'B', 'G', 'D', 'A', 'E']; // Standard tuning from high to low
         
+        // Memoize expensive calculations - compute once per render
+        const allTimestamps = getNoteTimestamps();
+        const barWidth = getBarWidth();
+        const slotsPerBar = getSlotsPerBar();
+        const currentBarTimestamp = getCurrentBarTimestamp();
+        
+        // Calculate visible bars based on viewport (viewport-based rendering)
+        const containerWidth = tabContainerWidth || guitarTabRef.current?.clientWidth || 1000; // Use tracked width or fallback
+        const visibleTimestamps = getVisibleBars(allTimestamps, tabScrollLeft, containerWidth);
+        
+        // Use visible timestamps for rendering bars, but keep all timestamps for grid lines and highlights
+        // (grid lines need full range for proper positioning)
+        const timestamps = visibleTimestamps.length > 0 ? visibleTimestamps : allTimestamps;
+        
         return (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
@@ -1541,6 +1702,9 @@ export default function WavePlayer({
                 height: '136px',
                 minHeight: '136px',
                 maxHeight: '136px',
+                contain: 'layout style paint',
+                willChange: 'scroll-position',
+                transform: 'translateZ(0)',
               }}
               onScroll={(e) => {
                 // Skip if autoscrolling or already syncing
@@ -1549,13 +1713,13 @@ export default function WavePlayer({
                 // Set flag to prevent infinite loop
                 isSyncingScrollRef.current = true;
                 
-                // Sync waveform, note track, and tab scrolls
-                if (containerRef.current) {
-                  containerRef.current.scrollLeft = e.currentTarget.scrollLeft;
-                }
-                if (noteTrackRef.current) {
-                  noteTrackRef.current.scrollLeft = e.currentTarget.scrollLeft;
-                }
+                const scrollLeft = e.currentTarget.scrollLeft;
+                
+                // Update scroll position for viewport culling
+                setTabScrollLeft(scrollLeft);
+                
+                // Use throttled scroll sync
+                handleScrollSync(scrollLeft);
                 
                 // Disable autoscroll when user manually scrolls
                 handleManualScroll();
@@ -1586,12 +1750,14 @@ export default function WavePlayer({
                         width: '100%',
                         height: `${tabContentHeight}px`,
                         top: `${8 + topOffset}px`, // Container padding (8px) + vertical offset
+                        contain: 'strict',
+                        contentVisibility: 'auto'
                       }}
                     >
                       {/* Current bar background highlight - only extend between top and bottom horizontal lines */}
-                      {getNoteTimestamps().map((timestamp, index) => {
-                        const isCurrentBar = getCurrentBarTimestamp() === timestamp;
-                        const barWidth = getBarWidth();
+                      {/* Use allTimestamps for highlights to ensure current bar is always visible */}
+                      {allTimestamps.map((timestamp, index) => {
+                        const isCurrentBar = currentBarTimestamp === timestamp;
                         if (!isCurrentBar) return null;
                         const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
                         
@@ -1614,8 +1780,8 @@ export default function WavePlayer({
                       })}
                       
                       {/* Hover highlights for each bar - match grid line positions */}
-                      {getNoteTimestamps().map((timestamp, index) => {
-                        const barWidth = getBarWidth();
+                      {/* Only render hover highlights when not playing for performance */}
+                      {!isPlaying && timestamps.map((timestamp, index) => {
                         const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
                         const isFirstBar = index === 0;
                         
@@ -1642,9 +1808,10 @@ export default function WavePlayer({
                       })}
                       
                       {/* Vertical grid lines for each bar - stay within top and bottom horizontal lines */}
+                      {/* Use allTimestamps for grid lines to ensure proper positioning */}
                       {(() => {
-                        const timestamps = getNoteTimestamps();
-                        const firstTimestamp = timestamps[0];
+                        const firstTimestamp = allTimestamps[0];
+                        const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
                         
                         return (
                           <>
@@ -1657,14 +1824,13 @@ export default function WavePlayer({
                                     ? `${firstTimestamp * zoomLevel - alignmentOffset}px`
                                     : `${(firstTimestamp / duration) * 100}%`,
                                   top: '0px',
-                                  height: `${(guitarStrings.length - 1) * 20}px`,
+                                  height: `${lastStringPosition}px`,
                                 }}
                               />
                             )}
                             
-                            {timestamps.map((timestamp, index) => {
-                              const isCurrentBar = getCurrentBarTimestamp() === timestamp;
-                              const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
+                            {allTimestamps.map((timestamp, index) => {
+                              const isCurrentBar = currentBarTimestamp === timestamp;
                               const isFirstBar = index === 0;
                               
                               // Skip first bar since we already have the leftmost line above
@@ -1707,9 +1873,8 @@ export default function WavePlayer({
                           }}
                         />
                         
-                        {/* Tab grid cells for each bar on this string */}
-                        {getNoteTimestamps().map((timestamp, barIndex) => {
-                          const barWidth = getBarWidth();
+                        {/* Tab grid cells for each bar on this string - use visible bars only for performance */}
+                        {timestamps.map((timestamp, barIndex) => {
                           const barLeft = zoomLevel > 0 
                             ? timestamp * zoomLevel - alignmentOffset
                             : (timestamp / duration) * 100;
@@ -1717,8 +1882,6 @@ export default function WavePlayer({
                             ? barWidth * zoomLevel
                             : (barWidth / duration) * 100;
                           
-                          // Always use fixed slots: 4 * beatsPerBar slots per bar
-                          const slotsPerBar = getSlotsPerBar();
                           const key = `${timestamp}-${stringIndex}`;
                           const notes = tabData[key] || [];
                           
@@ -1738,7 +1901,7 @@ export default function WavePlayer({
                           return (
                             <div
                               key={`tab-bar-${timestamp}-${stringIndex}`}
-                              className="absolute cursor-pointer"
+                              className={`absolute ${isPlaying ? 'cursor-default' : 'cursor-pointer'}`}
                               style={{
                                 left: typeof barLeft === 'number' 
                                   ? `${barLeft}px`
@@ -1749,15 +1912,18 @@ export default function WavePlayer({
                                 top: `${linePosition - 10}px`, // Parent positioned to center inputs on grid line
                                 height: '20px',
                                 minWidth: '60px',
-                                zIndex: 1
-                              }}
-                              onMouseEnter={() => {
+                                zIndex: 1,
+                                pointerEvents: isPlaying ? 'none' : 'auto',
+                                contain: 'layout style',
+                                contentVisibility: 'auto'
+                              } as React.CSSProperties}
+                              onMouseEnter={isPlaying ? undefined : () => {
                                 setHoveredSegment(`tab-${timestamp}`);
                               }}
-                              onMouseLeave={() => {
+                              onMouseLeave={isPlaying ? undefined : () => {
                                 setHoveredSegment(null);
                               }}
-                              onClick={(e) => {
+                              onClick={isPlaying ? undefined : (e) => {
                                 // Open side window for this bar
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -1773,29 +1939,23 @@ export default function WavePlayer({
                                 return (
                                   <div
                                     key={`tab-cell-${timestamp}-${stringIndex}-${slotIndex}`}
-                                    className="absolute pointer-events-none"
+                                    className="absolute pointer-events-none text-xs font-mono text-gray-900 dark:text-gray-100 text-center"
                                     style={{
                                       left: `${xPosition}px`,
                                       top: '0px', // Center vertically on the horizontal grid line (parent is at linePosition - 10, text at 0px centers it on linePosition)
                                       width: '30px',
                                       height: '20px',
-                                      transform: 'translateX(0)',
+                                      fontSize: '11px',
+                                      padding: '0',
+                                      margin: '0',
+                                      textAlign: 'center',
+                                      lineHeight: '20px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center'
                                     }}
                                   >
-                                    <div
-                                      className="w-full h-full text-xs font-mono text-gray-900 dark:text-gray-100 
-                                               text-center pointer-events-none"
-                                      style={{ 
-                                        fontSize: '11px', 
-                                        padding: '0', 
-                                        margin: '0', 
-                                        marginTop: '0px', 
-                                        textAlign: 'center', 
-                                        lineHeight: '20px' 
-                                      }}
-                                    >
-                                      {noteValue || ''}
-                                    </div>
+                                    {noteValue || ''}
                                   </div>
                                 );
                               })}
@@ -1817,10 +1977,16 @@ export default function WavePlayer({
       {/* Tab Editor Block - Below Tab Block */}
       {tabEditorOpen && editingBarTimestamp !== null && (() => {
         const guitarStrings = ['E', 'B', 'G', 'D', 'A', 'E']; // Standard tuning from high to low
+        const slotsPerBar = getSlotsPerBar(); // Calculate once outside the map
         return (
           <div 
             className="mt-4 mb-8 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-300 dark:border-gray-700
-                       animate-slide-down-fade-in">
+                       animate-slide-down-fade-in"
+            style={{ 
+              contain: 'layout style paint',
+              backfaceVisibility: 'hidden',
+              transform: 'translateZ(0)'
+            }}>
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
@@ -1852,7 +2018,6 @@ export default function WavePlayer({
               {guitarStrings.map((stringName: string, stringIndex: number) => {
                 const key = `${editingBarTimestamp}-${stringIndex}`;
                 const notes = tabData[key] || [];
-                const slotsPerBar = getSlotsPerBar();
                 
                 return (
                   <div key={`editor-string-${stringIndex}`} className="flex items-center gap-2">
