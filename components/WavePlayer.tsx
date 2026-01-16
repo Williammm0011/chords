@@ -151,6 +151,8 @@ export default function WavePlayer({
   const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
   const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
   const [showGuitarTab, setShowGuitarTab] = useState(false); // Show/hide guitar tab
+  const [tabEditorOpen, setTabEditorOpen] = useState(false); // Show/hide tab editor side window
+  const [editingBarTimestamp, setEditingBarTimestamp] = useState<number | null>(null); // Which bar is being edited
   // Tab data structure: `${timestamp}-${stringIndex}` -> string[] (array of note values per position)
   const [tabData, setTabData] = useState<Record<string, string[]>>(() => {
     if (!initialTabData) return {};
@@ -206,20 +208,37 @@ export default function WavePlayer({
   }, [initialNotes]);
   
   useEffect(() => {
-    if (initialTabData) {
+    // Only update from initialTabData if we're not currently editing
+    // This prevents overwriting user input with collapsed data from parent
+    if (initialTabData && !tabEditorOpen && editingBarTimestamp === null) {
       // Convert old format to new format if needed
       const converted: Record<string, string[]> = {};
       for (const [key, value] of Object.entries(initialTabData)) {
         if (typeof value === 'string') {
-          const parts = value.split('').filter(c => c.trim() || c === ' ');
-          converted[key] = parts.length > 0 ? parts : [];
+          // For string format, we can't preserve positions, so we'll just initialize empty
+          // The user will need to re-enter data, but at least we won't corrupt existing edits
+          const slotsPerBar = getSlotsPerBar();
+          const emptyArray: string[] = [];
+          for (let i = 0; i < slotsPerBar; i++) {
+            emptyArray.push('');
+          }
+          converted[key] = emptyArray;
         } else if (Array.isArray(value)) {
-          converted[key] = value;
+          // If it's already an array, ensure it has the correct length
+          const slotsPerBar = getSlotsPerBar();
+          const arr: string[] = [...value] as string[];
+          while (arr.length < slotsPerBar) {
+            arr.push('');
+          }
+          if (arr.length > slotsPerBar) {
+            arr.length = slotsPerBar;
+          }
+          converted[key] = arr;
         }
       }
       setTabData(converted);
     }
-  }, [initialTabData]);
+  }, [initialTabData, tabEditorOpen, editingBarTimestamp]);
   
   // Helper: Get all unique note positions for a bar (treating stacked notes as one)
   const getUniqueNotePositions = (timestamp: number): number[] => {
@@ -247,17 +266,29 @@ export default function WavePlayer({
   const setTabNote = (timestamp: number, stringIndex: number, noteIndex: number, value: string) => {
     const key = `${timestamp}-${stringIndex}`;
     setTabData(prev => {
-      const notes = prev[key] || [];
-      const newNotes = [...notes];
-      // Ensure array is long enough
-      while (newNotes.length <= noteIndex) {
-        newNotes.push('');
+      const slotsPerBar = getSlotsPerBar();
+      const existingNotes = prev[key];
+      
+      // If the array exists but is shorter than slotsPerBar, it might be collapsed
+      // Create a fresh array with the correct length, preserving existing values at their indices
+      let newNotes: string[];
+      if (existingNotes && Array.isArray(existingNotes)) {
+        // Start with a full-length array of empty strings
+        newNotes = Array(slotsPerBar).fill('');
+        // Copy existing values to their original indices (if they fit)
+        existingNotes.forEach((val, idx) => {
+          if (idx < slotsPerBar && val !== undefined && val !== null) {
+            newNotes[idx] = val;
+          }
+        });
+      } else {
+        // No existing data, create empty array
+        newNotes = Array(slotsPerBar).fill('');
       }
+      
+      // Set the value at the correct index
       newNotes[noteIndex] = value;
-      // Remove trailing empty values
-      while (newNotes.length > 0 && newNotes[newNotes.length - 1] === '') {
-        newNotes.pop();
-      }
+      
       return {
         ...prev,
         [key]: newNotes,
@@ -832,6 +863,11 @@ export default function WavePlayer({
   
   // Get the currently playing bar timestamp
   const getCurrentBarTimestamp = (): number | null => {
+    // If editing a bar, highlight that bar
+    if (editingBarTimestamp !== null) {
+      return editingBarTimestamp;
+    }
+    
     if (!duration || bpm <= 0 || beatsPerBar <= 0) return null;
     
     const barWidth = getBarWidth();
@@ -1292,13 +1328,13 @@ export default function WavePlayer({
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Note Track</h3>
               <button
                 onClick={() => setShowGuitarTab(!showGuitarTab)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600
+                className="flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-gray-300 dark:border-gray-600
                          text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800
                          hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 title={showGuitarTab ? "Hide Guitar Tab" : "Show Guitar Tab"}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} 
-                     className="w-4 h-4">
+                     className="w-4 h-4 flex-shrink-0">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 001.632 2.163l1.32.377a1.803 1.803 0 01-.99 3.467l-2.31-.66A2.25 2.25 0 019 19.553V15.553z" />
                 </svg>
                 <span>{showGuitarTab ? "Hide Tab" : "Show Tab"}</span>
@@ -1558,18 +1594,15 @@ export default function WavePlayer({
                         const barWidth = getBarWidth();
                         if (!isCurrentBar) return null;
                         const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
-                        const isFirstBar = index === 0;
                         
                         return (
                           <div
                             key={`tab-highlight-${timestamp}`}
                             className="absolute bg-blue-100/30 dark:bg-blue-900/20 pointer-events-none transition-all duration-200"
                             style={{
-                              left: isFirstBar 
-                                ? '0px' // First bar starts at left edge to match horizontal lines
-                                : zoomLevel > 0 
-                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
-                                  : `${(timestamp / duration) * 100}%`,
+                              left: zoomLevel > 0 
+                                ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                : `${(timestamp / duration) * 100}%`,
                               width: zoomLevel > 0 
                                 ? `${barWidth * zoomLevel}px`
                                 : `${(barWidth / duration) * 100}%`,
@@ -1595,11 +1628,9 @@ export default function WavePlayer({
                                 : 'opacity-0'
                             }`}
                             style={{
-                              left: isFirstBar 
-                                ? '0px' // First bar starts at left edge to match horizontal lines
-                                : zoomLevel > 0 
-                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
-                                  : `${(timestamp / duration) * 100}%`,
+                              left: zoomLevel > 0 
+                                ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                : `${(timestamp / duration) * 100}%`,
                               width: zoomLevel > 0 
                                 ? `${barWidth * zoomLevel}px`
                                 : `${(barWidth / duration) * 100}%`,
@@ -1679,12 +1710,9 @@ export default function WavePlayer({
                         {/* Tab grid cells for each bar on this string */}
                         {getNoteTimestamps().map((timestamp, barIndex) => {
                           const barWidth = getBarWidth();
-                          const isFirstBar = barIndex === 0;
-                          const barLeft = isFirstBar 
-                            ? 0
-                            : zoomLevel > 0 
-                              ? timestamp * zoomLevel - alignmentOffset
-                              : (timestamp / duration) * 100;
+                          const barLeft = zoomLevel > 0 
+                            ? timestamp * zoomLevel - alignmentOffset
+                            : (timestamp / duration) * 100;
                           const barWidthPx = zoomLevel > 0 
                             ? barWidth * zoomLevel
                             : (barWidth / duration) * 100;
@@ -1695,10 +1723,14 @@ export default function WavePlayer({
                           const notes = tabData[key] || [];
                           
                           // Calculate spacing for fixed slots
+                          // Distribute slots evenly across the bar width, ensuring the last slot stays within bounds
                           const barWidthNum = typeof barWidthPx === 'number' ? barWidthPx : 100;
+                          const cellWidth = 30; // Width of each cell
+                          // Calculate spacing so that the last cell fits within the bar
+                          // First cell at 0, last cell at (barWidthNum - cellWidth)
                           const spacing = slotsPerBar > 1 
-                            ? barWidthNum / (slotsPerBar - 1)
-                            : barWidthNum / 2; // Fallback for edge case
+                            ? (barWidthNum - cellWidth) / (slotsPerBar - 1)
+                            : (barWidthNum - cellWidth) / 2; // Fallback for edge case
                           
                           // Create all slots (0 to slotsPerBar - 1)
                           const allSlots = Array.from({ length: slotsPerBar }, (_, i) => i);
@@ -1706,19 +1738,18 @@ export default function WavePlayer({
                           return (
                             <div
                               key={`tab-bar-${timestamp}-${stringIndex}`}
-                              className="absolute cursor-text"
+                              className="absolute cursor-pointer"
                               style={{
-                                left: isFirstBar 
-                                  ? '0px'
-                                  : typeof barLeft === 'number' 
-                                    ? `${barLeft}px`
-                                    : `${barLeft}%`,
+                                left: typeof barLeft === 'number' 
+                                  ? `${barLeft}px`
+                                  : `${barLeft}%`,
                                 width: typeof barWidthPx === 'number' 
                                   ? `${barWidthPx}px`
                                   : `${barWidthPx}%`,
                                 top: `${linePosition - 10}px`, // Parent positioned to center inputs on grid line
                                 height: '20px',
-                                minWidth: '60px'
+                                minWidth: '60px',
+                                zIndex: 1
                               }}
                               onMouseEnter={() => {
                                 setHoveredSegment(`tab-${timestamp}`);
@@ -1727,154 +1758,44 @@ export default function WavePlayer({
                                 setHoveredSegment(null);
                               }}
                               onClick={(e) => {
-                                // Only handle click if not clicking on an input
-                                if ((e.target as HTMLElement).tagName === 'INPUT') {
-                                  return;
-                                }
-                                
-                                // Find closest slot to clicked position
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const clickX = e.clientX - rect.left;
-                                const barWidthNum = typeof barWidthPx === 'number' ? barWidthPx : 100;
-                                const slotsPerBar = getSlotsPerBar();
-                                const spacing = slotsPerBar > 1 ? barWidthNum / (slotsPerBar - 1) : barWidthNum / 2;
-                                
-                                // Find closest slot
-                                let closestSlot = 0;
-                                let minDist = Math.abs(0 - clickX);
-                                
-                                for (let i = 0; i < slotsPerBar; i++) {
-                                  const slotPos = i * spacing;
-                                  const dist = Math.abs(slotPos - clickX);
-                                  if (dist < minDist) {
-                                    minDist = dist;
-                                    closestSlot = i;
-                                  }
-                                }
-                                
-                                ensureNoteAtPosition(timestamp, stringIndex, closestSlot);
-                                setFocusedTabCell({ barIndex, stringIndex, noteIndex: closestSlot });
-                                
-                                // Focus the input after a short delay to ensure it's created
-                                setTimeout(() => {
-                                  const input = document.querySelector(`input[data-tab-cell="${timestamp}-${stringIndex}-${closestSlot}"]`) as HTMLInputElement;
-                                  if (input) {
-                                    input.focus();
-                                  }
-                                }, 0);
+                                // Open side window for this bar
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditingBarTimestamp(timestamp);
+                                setTabEditorOpen(true);
                               }}
                             >
                               {/* Render all fixed slots for this string */}
                               {allSlots.map((slotIndex) => {
                                 const xPosition = slotIndex * spacing;
                                 const noteValue = notes[slotIndex] || '';
-                                const isFocusedCell = focusedTabCell?.barIndex === barIndex && 
-                                                     focusedTabCell?.stringIndex === stringIndex &&
-                                                     focusedTabCell?.noteIndex === slotIndex;
                                 
                                 return (
                                   <div
                                     key={`tab-cell-${timestamp}-${stringIndex}-${slotIndex}`}
-                                    className="absolute"
-                                      style={{
-                                        left: `${xPosition}px`,
-                                        top: '0px', // Center vertically on the horizontal grid line (parent is at linePosition - 10, input at 0px centers it on linePosition)
-                                        width: '30px',
-                                        height: '20px',
-                                        transform: 'translateX(0)',
-                                      }}
+                                    className="absolute pointer-events-none"
+                                    style={{
+                                      left: `${xPosition}px`,
+                                      top: '0px', // Center vertically on the horizontal grid line (parent is at linePosition - 10, text at 0px centers it on linePosition)
+                                      width: '30px',
+                                      height: '20px',
+                                      transform: 'translateX(0)',
+                                    }}
                                   >
                                     <div
-                                      className={`absolute transition-colors ${
-                                        isFocusedCell 
-                                          ? 'bg-blue-500/20 dark:bg-blue-400/20 border-2 border-blue-500 dark:border-blue-400 rounded' 
-                                          : ''
-                                      } pointer-events-none`}
-                                      style={{
-                                        left: '0px',
-                                        top: '0px',
-                                        width: '30px',
-                                        height: '20px',
-                                        zIndex: isFocusedCell ? 15 : 5,
-                                      }}
-                                    />
-                                    <div
-                                      className={`absolute transition-colors ${
-                                        isFocusedCell 
-                                          ? 'bg-blue-500/20 dark:bg-blue-400/20 border-2 border-blue-500 dark:border-blue-400 rounded' 
-                                          : ''
-                                      } pointer-events-none`}
-                                      style={{
-                                        left: '0px',
-                                        top: '0px',
-                                        width: '30px',
-                                        height: '20px',
-                                        zIndex: isFocusedCell ? 15 : 5,
-                                      }}
-                                    />
-                                    <input
-                                      type="text"
-                                      data-tab-cell={`${timestamp}-${stringIndex}-${slotIndex}`}
-                                      value={noteValue}
-                                      onChange={(e) => {
-                                        const value = e.target.value;
-                                        // Allow numbers, space, and empty string (multi-digit numbers allowed)
-                                        if (value === '' || /^[0-9\s]+$/.test(value)) {
-                                          setTabNote(timestamp, stringIndex, slotIndex, value === ' ' ? ' ' : value);
-                                        } else {
-                                          // If invalid character, revert to previous value
-                                          e.target.value = noteValue;
-                                        }
-                                      }}
-                                      onKeyDown={(e) => {
-                                        // Handle arrow keys and tab
-                                        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) {
-                                          handleTabArrowKey(e, timestamp, stringIndex, slotIndex);
-                                          return;
-                                        }
-                                        
-                                        // Handle space
-                                        if (e.key === ' ') {
-                                          e.preventDefault();
-                                          setTabNote(timestamp, stringIndex, slotIndex, ' ');
-                                          return;
-                                        }
-                                        
-                                        // Allow numbers and navigation/editing keys
-                                        if (/^[0-9]$/.test(e.key) || 
-                                            ['Backspace', 'Delete', 'Enter', 'Escape', 'Home', 'End'].includes(e.key)) {
-                                          // Allow the input
-                                          return;
-                                        }
-                                        
-                                        // Block other keys
-                                        e.preventDefault();
-                                      }}
-                                      onFocus={(e) => {
-                                        setIsTypingNote(true);
-                                        setFocusedTabCell({ barIndex, stringIndex, noteIndex: slotIndex });
-                                        // Ensure note exists at this position
-                                        ensureNoteAtPosition(timestamp, stringIndex, slotIndex);
-                                        // Select all text on focus for easy replacement
-                                        e.target.select();
-                                      }}
-                                      onBlur={() => {
-                                        setIsTypingNote(false);
-                                        if (focusedTabCellRef.current?.barIndex === barIndex &&
-                                            focusedTabCellRef.current?.stringIndex === stringIndex &&
-                                            focusedTabCellRef.current?.noteIndex === slotIndex) {
-                                          setFocusedTabCell(null);
-                                        }
-                                      }}
-                                      onClick={(e) => {
-                                        e.stopPropagation(); // Prevent parent click handler
-                                      }}
                                       className="w-full h-full text-xs font-mono text-gray-900 dark:text-gray-100 
-                                               bg-transparent border-0 cursor-text relative z-20
-                                               focus:outline-none focus:ring-0
-                                               transition-colors text-center"
-                                      style={{ fontSize: '11px', padding: '0', margin: '0', marginTop: '-4px', textAlign: 'center', lineHeight: '20px', verticalAlign: 'middle' }}
-                                    />
+                                               text-center pointer-events-none"
+                                      style={{ 
+                                        fontSize: '11px', 
+                                        padding: '0', 
+                                        margin: '0', 
+                                        marginTop: '0px', 
+                                        textAlign: 'center', 
+                                        lineHeight: '20px' 
+                                      }}
+                                    >
+                                      {noteValue || ''}
+                                    </div>
                                   </div>
                                 );
                               })}
@@ -1888,6 +1809,163 @@ export default function WavePlayer({
                   </div>
                 );
               })()}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Tab Editor Block - Below Tab Block */}
+      {tabEditorOpen && editingBarTimestamp !== null && (() => {
+        const guitarStrings = ['E', 'B', 'G', 'D', 'A', 'E']; // Standard tuning from high to low
+        return (
+          <div className="mt-4 mb-8 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-300 dark:border-gray-700">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Edit Bar
+              </h3>
+              <button
+                onClick={() => {
+                  setTabEditorOpen(false);
+                  setEditingBarTimestamp(null);
+                }}
+                className="flex items-center justify-center w-8 h-8 rounded-full 
+                         bg-gray-200 dark:bg-gray-700 
+                         hover:bg-gray-300 dark:hover:bg-gray-600
+                         text-gray-600 dark:text-gray-400 
+                         hover:text-gray-800 dark:hover:text-gray-200
+                         transition-all duration-200 
+                         hover:scale-110 active:scale-95
+                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                aria-label="Close editor"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                  <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Editor Content */}
+            <div className="space-y-2">
+              {guitarStrings.map((stringName: string, stringIndex: number) => {
+                const key = `${editingBarTimestamp}-${stringIndex}`;
+                const notes = tabData[key] || [];
+                const slotsPerBar = getSlotsPerBar();
+                
+                return (
+                  <div key={`editor-string-${stringIndex}`} className="flex items-center gap-2">
+                    <div className="w-8 text-sm font-mono text-gray-600 dark:text-gray-400 text-right">
+                      {stringName}
+                    </div>
+                    <div className="flex-1 flex gap-1 justify-center">
+                      {Array.from({ length: slotsPerBar }).map((_, slotIndex) => {
+                        const currentValue = notes[slotIndex] || '';
+                        // Add a gap every 4 columns (after indices 3, 7, 11, 15, etc.)
+                        const shouldAddGap = (slotIndex + 1) % 4 === 0 && slotIndex < slotsPerBar - 1;
+                        
+                        return (
+                          <input
+                            key={`editor-slot-${stringIndex}-${slotIndex}`}
+                            type="text"
+                            value={currentValue}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              
+                              // Allow numbers and space (multi-digit numbers like 11, 20, etc. are fully supported)
+                              // The regex allows one or more digits, or a space
+                              if (value === '' || /^[0-9]+$/.test(value) || value === ' ') {
+                                setTabNote(editingBarTimestamp, stringIndex, slotIndex, value === ' ' ? ' ' : value);
+                              }
+                              // If invalid character, the controlled input will revert to currentValue on next render
+                            }}
+                            onKeyDown={(e) => {
+                              // Handle arrow keys
+                              if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) {
+                                e.preventDefault();
+                                const slotsPerBar = getSlotsPerBar();
+                                
+                                if (e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey)) {
+                                  if (slotIndex > 0) {
+                                    const prevInput = document.querySelector(`input[data-editor-slot="${stringIndex}-${slotIndex - 1}"]`) as HTMLInputElement;
+                                    if (prevInput) prevInput.focus();
+                                  }
+                                } else if (e.key === 'ArrowRight' || (e.key === 'Tab' && !e.shiftKey)) {
+                                  if (slotIndex < slotsPerBar - 1) {
+                                    const nextInput = document.querySelector(`input[data-editor-slot="${stringIndex}-${slotIndex + 1}"]`) as HTMLInputElement;
+                                    if (nextInput) nextInput.focus();
+                                  }
+                                } else if (e.key === 'ArrowUp') {
+                                  if (stringIndex > 0) {
+                                    const upInput = document.querySelector(`input[data-editor-slot="${stringIndex - 1}-${slotIndex}"]`) as HTMLInputElement;
+                                    if (upInput) upInput.focus();
+                                  }
+                                } else if (e.key === 'ArrowDown') {
+                                  if (stringIndex < 5) {
+                                    const downInput = document.querySelector(`input[data-editor-slot="${stringIndex + 1}-${slotIndex}"]`) as HTMLInputElement;
+                                    if (downInput) downInput.focus();
+                                  }
+                                }
+                                return;
+                              }
+                              
+                              // Handle space
+                              if (e.key === ' ') {
+                                e.preventDefault();
+                                setTabNote(editingBarTimestamp, stringIndex, slotIndex, ' ');
+                                return;
+                              }
+                              
+                              // Allow all number keys (0-9) for multi-digit input, and navigation/editing keys
+                              // Don't prevent default for numbers - let them be handled by onChange
+                              if (/^[0-9]$/.test(e.key)) {
+                                // Allow the key to proceed normally for multi-digit input
+                                return;
+                              }
+                              
+                              // Allow navigation and editing keys
+                              if (['Backspace', 'Delete', 'Enter', 'Escape', 'Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                                return;
+                              }
+                              
+                              // Block other keys (letters, symbols, etc.)
+                              e.preventDefault();
+                            }}
+                            onFocus={(e) => {
+                              const input = e.target as HTMLInputElement;
+                              // Don't auto-select text on focus - let users type naturally
+                              // Place cursor at the end of existing text to allow appending digits
+                              if (input.value && input.value.length > 0) {
+                                setTimeout(() => {
+                                  // Place cursor at end to allow appending more digits
+                                  const endPos = input.value.length;
+                                  input.setSelectionRange(endPos, endPos);
+                                }, 0);
+                              } else {
+                                // For empty fields, place cursor at start (ready for typing)
+                                setTimeout(() => {
+                                  input.setSelectionRange(0, 0);
+                                }, 0);
+                              }
+                            }}
+                            data-editor-slot={`${stringIndex}-${slotIndex}`}
+                            className={`h-8 text-xs font-mono text-center border border-gray-300 dark:border-gray-600 
+                                     bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                                     focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                                     rounded ${shouldAddGap ? 'mr-2' : ''}`}
+                            style={{ 
+                              fontSize: '11px',
+                              width: '36px', // Wider to accommodate 2-3 digit numbers
+                              minWidth: '36px'
+                            }}
+                            maxLength={3}
+                            placeholder=""
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
