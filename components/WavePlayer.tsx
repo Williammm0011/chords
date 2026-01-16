@@ -151,21 +151,31 @@ export default function WavePlayer({
   const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
   const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
   const [showGuitarTab, setShowGuitarTab] = useState(false); // Show/hide guitar tab
-  const [tabData, setTabData] = useState<Record<string, string>>(() => {
-    // Convert old format (Record<number, string>) to new format (Record<string, string>)
+  // Tab data structure: `${timestamp}-${stringIndex}` -> string[] (array of note values per position)
+  const [tabData, setTabData] = useState<Record<string, string[]>>(() => {
     if (!initialTabData) return {};
-    const converted: Record<string, string> = {};
+    const converted: Record<string, string[]> = {};
+    // Convert old format to new format
     for (const [key, value] of Object.entries(initialTabData)) {
-      // If key is a number (old format), convert to new format with segment 0
-      if (/^\d+\.?\d*$/.test(key)) {
-        converted[`${key}-0`] = value;
-      } else {
-        // Already in new format
+      if (typeof value === 'string') {
+        // Old format: single string per bar, convert to array
+        const parts = value.split('').filter(c => c.trim() || c === ' ');
+        converted[key] = parts.length > 0 ? parts : [];
+      } else if (Array.isArray(value)) {
         converted[key] = value;
       }
     }
     return converted;
-  }); // Tab data by segment: `${timestamp}-${segmentIndex}`
+  });
+  
+  // Current focused cell: { barIndex, stringIndex, noteIndex }
+  const [focusedTabCell, setFocusedTabCell] = useState<{ barIndex: number; stringIndex: number; noteIndex: number } | null>(null);
+  const focusedTabCellRef = useRef<{ barIndex: number; stringIndex: number; noteIndex: number } | null>(null);
+  
+  // Keep ref in sync
+  useEffect(() => {
+    focusedTabCellRef.current = focusedTabCell;
+  }, [focusedTabCell]);
   
   // Sync BPM/offset/notes from parent when loading a saved item
   useEffect(() => {
@@ -198,17 +208,145 @@ export default function WavePlayer({
   useEffect(() => {
     if (initialTabData) {
       // Convert old format to new format if needed
-      const converted: Record<string, string> = {};
+      const converted: Record<string, string[]> = {};
       for (const [key, value] of Object.entries(initialTabData)) {
-        if (/^\d+\.?\d*$/.test(key)) {
-          converted[`${key}-0`] = value;
-        } else {
+        if (typeof value === 'string') {
+          const parts = value.split('').filter(c => c.trim() || c === ' ');
+          converted[key] = parts.length > 0 ? parts : [];
+        } else if (Array.isArray(value)) {
           converted[key] = value;
         }
       }
       setTabData(converted);
     }
   }, [initialTabData]);
+  
+  // Helper: Get all unique note positions for a bar (treating stacked notes as one)
+  const getUniqueNotePositions = (timestamp: number): number[] => {
+    const positions = new Set<number>();
+    for (let stringIndex = 0; stringIndex < 6; stringIndex++) {
+      const key = `${timestamp}-${stringIndex}`;
+      const notes = tabData[key] || [];
+      notes.forEach((note, index) => {
+        if (note && note.trim() !== '') {
+          positions.add(index);
+        }
+      });
+    }
+    return Array.from(positions).sort((a, b) => a - b);
+  };
+  
+  // Helper: Get note value at specific position
+  const getTabNote = (timestamp: number, stringIndex: number, noteIndex: number): string => {
+    const key = `${timestamp}-${stringIndex}`;
+    const notes = tabData[key] || [];
+    return notes[noteIndex] || '';
+  };
+  
+  // Helper: Set note value at specific position
+  const setTabNote = (timestamp: number, stringIndex: number, noteIndex: number, value: string) => {
+    const key = `${timestamp}-${stringIndex}`;
+    setTabData(prev => {
+      const notes = prev[key] || [];
+      const newNotes = [...notes];
+      // Ensure array is long enough
+      while (newNotes.length <= noteIndex) {
+        newNotes.push('');
+      }
+      newNotes[noteIndex] = value;
+      // Remove trailing empty values
+      while (newNotes.length > 0 && newNotes[newNotes.length - 1] === '') {
+        newNotes.pop();
+      }
+      return {
+        ...prev,
+        [key]: newNotes,
+      };
+    });
+  };
+  
+  // Sync tab data changes to parent (moved to useEffect to avoid render warnings)
+  const tabDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (!onTabChange) return;
+    
+    // Debounce to avoid excessive updates
+    if (tabDataTimeoutRef.current) {
+      clearTimeout(tabDataTimeoutRef.current);
+    }
+    
+    tabDataTimeoutRef.current = setTimeout(() => {
+      // Convert to old format for compatibility (flatten arrays to strings)
+      const oldFormat: Record<string, string> = {};
+      for (const [k, v] of Object.entries(tabData)) {
+        oldFormat[k] = Array.isArray(v) ? v.join('') : String(v);
+      }
+      onTabChange(oldFormat);
+    }, 100);
+    
+    return () => {
+      if (tabDataTimeoutRef.current) {
+        clearTimeout(tabDataTimeoutRef.current);
+      }
+    };
+  }, [tabData, onTabChange]);
+  
+  // Adjust zoom when tab is shown/hidden
+  useEffect(() => {
+    if (showGuitarTab && zoomLevel < 50) {
+      // Set zoom to 50px per second when tab is shown (if current zoom is smaller)
+      if (onZoomChange) {
+        onZoomChange(50);
+      } else {
+        setInternalZoomLevel(50);
+      }
+    }
+  }, [showGuitarTab, zoomLevel, onZoomChange]);
+  
+  // Handle arrow key navigation in tab
+  const handleTabArrowKey = (e: React.KeyboardEvent, timestamp: number, stringIndex: number, slotIndex: number) => {
+    const timestamps = getNoteTimestamps();
+    const barIndex = timestamps.indexOf(timestamp);
+    const slotsPerBar = getSlotsPerBar();
+    
+    if (e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey)) {
+      e.preventDefault();
+      if (slotIndex > 0) {
+        setFocusedTabCell({ barIndex, stringIndex, noteIndex: slotIndex - 1 });
+      } else if (barIndex > 0) {
+        // Move to last slot of previous bar
+        setFocusedTabCell({ barIndex: barIndex - 1, stringIndex, noteIndex: slotsPerBar - 1 });
+      }
+    } else if (e.key === 'ArrowRight' || (e.key === 'Tab' && !e.shiftKey)) {
+      e.preventDefault();
+      if (slotIndex < slotsPerBar - 1) {
+        setFocusedTabCell({ barIndex, stringIndex, noteIndex: slotIndex + 1 });
+      } else if (barIndex < timestamps.length - 1) {
+        // Move to first slot of next bar
+        setFocusedTabCell({ barIndex: barIndex + 1, stringIndex, noteIndex: 0 });
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (stringIndex > 0) {
+        setFocusedTabCell({ barIndex, stringIndex: stringIndex - 1, noteIndex: slotIndex });
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (stringIndex < 5) {
+        setFocusedTabCell({ barIndex, stringIndex: stringIndex + 1, noteIndex: slotIndex });
+      }
+    }
+  };
+  
+  // Ensure note exists at position (create if needed)
+  const ensureNoteAtPosition = (timestamp: number, stringIndex: number, noteIndex: number) => {
+    const key = `${timestamp}-${stringIndex}`;
+    const notes = tabData[key] || [];
+    if (notes.length <= noteIndex) {
+      // Create empty note at this position
+      setTabNote(timestamp, stringIndex, noteIndex, '');
+    }
+  };
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
   const handleHelpClose = () => {
@@ -546,19 +684,6 @@ export default function WavePlayer({
     });
   };
 
-  const handleTabChange = (timestamp: number, segmentIndex: number, stringIndex: number, value: string) => {
-    const key = `${timestamp}-${segmentIndex}-${stringIndex}`;
-    setTabData(prev => {
-      const updated = {
-        ...prev,
-        [key]: value,
-      };
-      if (onTabChange) {
-        onTabChange(updated);
-      }
-      return updated;
-    });
-  };
 
   const handleSetOffsetFromCursor = () => {
     if (!wavesurferRef.current) return;
@@ -684,7 +809,8 @@ export default function WavePlayer({
     while (barTime <= duration) {
       if (barTime >= 0) {
         // Round to 3 decimal places to avoid floating point precision issues
-        timestamps.push(Math.round(barTime * 1000) / 1000);
+        const roundedTime = Math.round(barTime * 1000) / 1000;
+        timestamps.push(roundedTime);
       }
       barTime += secondsPerBar;
     }
@@ -697,6 +823,11 @@ export default function WavePlayer({
     if (bpm <= 0 || beatsPerBar <= 0) return 1;
     const secondsPerBeat = 60 / bpm;
     return secondsPerBeat * beatsPerBar;
+  };
+  
+  // Get number of slots per bar (4 * beatsPerBar)
+  const getSlotsPerBar = (): number => {
+    return beatsPerBar > 0 ? beatsPerBar * 4 : 16; // Default to 16 if beatsPerBar is 0
   };
   
   // Get the currently playing bar timestamp
@@ -1480,31 +1611,55 @@ export default function WavePlayer({
                       })}
                       
                       {/* Vertical grid lines for each bar - stay within top and bottom horizontal lines */}
-                      {getNoteTimestamps().map((timestamp, index) => {
-                        const isCurrentBar = getCurrentBarTimestamp() === timestamp;
-                        const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
-                        const isFirstBar = index === 0;
+                      {(() => {
+                        const timestamps = getNoteTimestamps();
+                        const firstTimestamp = timestamps[0];
                         
                         return (
-                          <div
-                            key={`tab-grid-${timestamp}`}
-                            className={`absolute transition-all duration-200 pointer-events-none ${
-                              isCurrentBar 
-                                ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
-                                : 'w-px bg-gray-300 dark:bg-gray-700'
-                            }`}
-                            style={{
-                              left: isFirstBar 
-                                ? '0px' // First vertical line starts at left edge to match horizontal lines
-                                : zoomLevel > 0 
-                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
-                                  : `${(timestamp / duration) * 100}%`,
-                              top: '0px', // Start at first horizontal line (0px)
-                              height: `${lastStringPosition}px`, // End at last horizontal line (100px)
-                            }}
-                          />
+                          <>
+                            {/* Leftmost bar line at first bar position - use first bar's actual position */}
+                            {firstTimestamp !== undefined && (
+                              <div
+                                className="absolute w-px bg-gray-300 dark:bg-gray-700 pointer-events-none"
+                                style={{
+                                  left: zoomLevel > 0 
+                                    ? `${firstTimestamp * zoomLevel - alignmentOffset}px`
+                                    : `${(firstTimestamp / duration) * 100}%`,
+                                  top: '0px',
+                                  height: `${(guitarStrings.length - 1) * 20}px`,
+                                }}
+                              />
+                            )}
+                            
+                            {timestamps.map((timestamp, index) => {
+                              const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                              const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
+                              const isFirstBar = index === 0;
+                              
+                              // Skip first bar since we already have the leftmost line above
+                              if (isFirstBar) return null;
+                              
+                              return (
+                                <div
+                                  key={`tab-grid-${timestamp}`}
+                                  className={`absolute transition-all duration-200 pointer-events-none ${
+                                    isCurrentBar 
+                                      ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
+                                      : 'w-px bg-gray-300 dark:bg-gray-700'
+                                  }`}
+                                  style={{
+                                    left: zoomLevel > 0 
+                                      ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                      : `${(timestamp / duration) * 100}%`,
+                                    top: '0px', // Start at first horizontal line (0px)
+                                    height: `${lastStringPosition}px`, // End at last horizontal line (100px)
+                                  }}
+                                />
+                              );
+                            })}
+                          </>
                         );
-                      })}
+                      })()}
                   
                   {/* 6 Horizontal grid lines (one for each string) */}
                   {guitarStrings.map((stringName, stringIndex) => {
@@ -1521,82 +1676,208 @@ export default function WavePlayer({
                           }}
                         />
                         
-                        {/* Tab inputs for each bar on this string */}
+                        {/* Tab grid cells for each bar on this string */}
                         {getNoteTimestamps().map((timestamp, barIndex) => {
                           const barWidth = getBarWidth();
-                          const tabKey = `${timestamp}-${stringIndex}`;
                           const isFirstBar = barIndex === 0;
+                          const barLeft = isFirstBar 
+                            ? 0
+                            : zoomLevel > 0 
+                              ? timestamp * zoomLevel - alignmentOffset
+                              : (timestamp / duration) * 100;
+                          const barWidthPx = zoomLevel > 0 
+                            ? barWidth * zoomLevel
+                            : (barWidth / duration) * 100;
+                          
+                          // Always use fixed slots: 4 * beatsPerBar slots per bar
+                          const slotsPerBar = getSlotsPerBar();
+                          const key = `${timestamp}-${stringIndex}`;
+                          const notes = tabData[key] || [];
+                          
+                          // Calculate spacing for fixed slots
+                          const barWidthNum = typeof barWidthPx === 'number' ? barWidthPx : 100;
+                          const spacing = slotsPerBar > 1 
+                            ? barWidthNum / (slotsPerBar - 1)
+                            : barWidthNum / 2; // Fallback for edge case
+                          
+                          // Create all slots (0 to slotsPerBar - 1)
+                          const allSlots = Array.from({ length: slotsPerBar }, (_, i) => i);
                           
                           return (
                             <div
-                              key={`tab-${timestamp}-${stringIndex}`}
-                              className="absolute"
+                              key={`tab-bar-${timestamp}-${stringIndex}`}
+                              className="absolute cursor-text"
                               style={{
                                 left: isFirstBar 
-                                  ? '0px' // First bar starts at left edge to match horizontal lines
-                                  : zoomLevel > 0 
-                                    ? `${timestamp * zoomLevel - alignmentOffset}px`
-                                    : `${(timestamp / duration) * 100}%`,
-                                width: zoomLevel > 0 
-                                  ? `${barWidth * zoomLevel}px`
-                                  : `${(barWidth / duration) * 100}%`,
-                                top: `${linePosition}px`,
+                                  ? '0px'
+                                  : typeof barLeft === 'number' 
+                                    ? `${barLeft}px`
+                                    : `${barLeft}%`,
+                                width: typeof barWidthPx === 'number' 
+                                  ? `${barWidthPx}px`
+                                  : `${barWidthPx}%`,
+                                top: `${linePosition - 10}px`, // Parent positioned to center inputs on grid line
                                 height: '20px',
                                 minWidth: '60px'
                               }}
                               onMouseEnter={() => {
-                                // Set hover state for this specific bar
                                 setHoveredSegment(`tab-${timestamp}`);
                               }}
                               onMouseLeave={() => {
                                 setHoveredSegment(null);
                               }}
-                            >
-                              
-                              {/* Single tab input for entire bar */}
-                              <input
-                                type="text"
-                                value={
-                                  // Check new format first (per bar), then fall back to old format (segment 0)
-                                  tabData[tabKey] || 
-                                  tabData[`${timestamp}-0-${stringIndex}`] || 
-                                  ''
+                              onClick={(e) => {
+                                // Only handle click if not clicking on an input
+                                if ((e.target as HTMLElement).tagName === 'INPUT') {
+                                  return;
                                 }
-                                onChange={(e) => {
-                                  // Store using new format: `${timestamp}-${stringIndex}`
-                                  const value = e.target.value;
-                                  const newKey = `${timestamp}-${stringIndex}`;
-                                  setTabData(prev => {
-                                    const updated = {
-                                      ...prev,
-                                      [newKey]: value,
-                                    };
-                                    if (onTabChange) {
-                                      onTabChange(updated);
-                                    }
-                                    return updated;
-                                  });
-                                }}
-                                onFocus={(e) => {
-                                  setIsTypingNote(true);
-                                  setHoveredSegment(`tab-${timestamp}`);
-                                }}
-                                onBlur={(e) => {
-                                  setIsTypingNote(false);
-                                  setHoveredSegment(null);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === 'Escape') {
-                                    e.currentTarget.blur();
+                                
+                                // Find closest slot to clicked position
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const clickX = e.clientX - rect.left;
+                                const barWidthNum = typeof barWidthPx === 'number' ? barWidthPx : 100;
+                                const slotsPerBar = getSlotsPerBar();
+                                const spacing = slotsPerBar > 1 ? barWidthNum / (slotsPerBar - 1) : barWidthNum / 2;
+                                
+                                // Find closest slot
+                                let closestSlot = 0;
+                                let minDist = Math.abs(0 - clickX);
+                                
+                                for (let i = 0; i < slotsPerBar; i++) {
+                                  const slotPos = i * spacing;
+                                  const dist = Math.abs(slotPos - clickX);
+                                  if (dist < minDist) {
+                                    minDist = dist;
+                                    closestSlot = i;
                                   }
-                                }}
-                                placeholder=""
-                                className="w-full h-full px-2 py-0.5 text-xs font-mono text-gray-900 dark:text-gray-100 
-                                         bg-transparent border border-transparent cursor-text relative z-10
-                                         focus:ring-1 focus:ring-blue-500 focus:border-blue-400 dark:focus:border-blue-400
-                                         transition-colors text-center"
-                                style={{ fontSize: '11px' }}
-                              />
+                                }
+                                
+                                ensureNoteAtPosition(timestamp, stringIndex, closestSlot);
+                                setFocusedTabCell({ barIndex, stringIndex, noteIndex: closestSlot });
+                                
+                                // Focus the input after a short delay to ensure it's created
+                                setTimeout(() => {
+                                  const input = document.querySelector(`input[data-tab-cell="${timestamp}-${stringIndex}-${closestSlot}"]`) as HTMLInputElement;
+                                  if (input) {
+                                    input.focus();
+                                  }
+                                }, 0);
+                              }}
+                            >
+                              {/* Render all fixed slots for this string */}
+                              {allSlots.map((slotIndex) => {
+                                const xPosition = slotIndex * spacing;
+                                const noteValue = notes[slotIndex] || '';
+                                const isFocusedCell = focusedTabCell?.barIndex === barIndex && 
+                                                     focusedTabCell?.stringIndex === stringIndex &&
+                                                     focusedTabCell?.noteIndex === slotIndex;
+                                
+                                return (
+                                  <div
+                                    key={`tab-cell-${timestamp}-${stringIndex}-${slotIndex}`}
+                                    className="absolute"
+                                      style={{
+                                        left: `${xPosition}px`,
+                                        top: '0px', // Center vertically on the horizontal grid line (parent is at linePosition - 10, input at 0px centers it on linePosition)
+                                        width: '30px',
+                                        height: '20px',
+                                        transform: 'translateX(0)',
+                                      }}
+                                  >
+                                    <div
+                                      className={`absolute transition-colors ${
+                                        isFocusedCell 
+                                          ? 'bg-blue-500/20 dark:bg-blue-400/20 border-2 border-blue-500 dark:border-blue-400 rounded' 
+                                          : ''
+                                      } pointer-events-none`}
+                                      style={{
+                                        left: '0px',
+                                        top: '0px',
+                                        width: '30px',
+                                        height: '20px',
+                                        zIndex: isFocusedCell ? 15 : 5,
+                                      }}
+                                    />
+                                    <div
+                                      className={`absolute transition-colors ${
+                                        isFocusedCell 
+                                          ? 'bg-blue-500/20 dark:bg-blue-400/20 border-2 border-blue-500 dark:border-blue-400 rounded' 
+                                          : ''
+                                      } pointer-events-none`}
+                                      style={{
+                                        left: '0px',
+                                        top: '0px',
+                                        width: '30px',
+                                        height: '20px',
+                                        zIndex: isFocusedCell ? 15 : 5,
+                                      }}
+                                    />
+                                    <input
+                                      type="text"
+                                      data-tab-cell={`${timestamp}-${stringIndex}-${slotIndex}`}
+                                      value={noteValue}
+                                      onChange={(e) => {
+                                        const value = e.target.value;
+                                        // Allow numbers, space, and empty string (multi-digit numbers allowed)
+                                        if (value === '' || /^[0-9\s]+$/.test(value)) {
+                                          setTabNote(timestamp, stringIndex, slotIndex, value === ' ' ? ' ' : value);
+                                        } else {
+                                          // If invalid character, revert to previous value
+                                          e.target.value = noteValue;
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        // Handle arrow keys and tab
+                                        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) {
+                                          handleTabArrowKey(e, timestamp, stringIndex, slotIndex);
+                                          return;
+                                        }
+                                        
+                                        // Handle space
+                                        if (e.key === ' ') {
+                                          e.preventDefault();
+                                          setTabNote(timestamp, stringIndex, slotIndex, ' ');
+                                          return;
+                                        }
+                                        
+                                        // Allow numbers and navigation/editing keys
+                                        if (/^[0-9]$/.test(e.key) || 
+                                            ['Backspace', 'Delete', 'Enter', 'Escape', 'Home', 'End'].includes(e.key)) {
+                                          // Allow the input
+                                          return;
+                                        }
+                                        
+                                        // Block other keys
+                                        e.preventDefault();
+                                      }}
+                                      onFocus={(e) => {
+                                        setIsTypingNote(true);
+                                        setFocusedTabCell({ barIndex, stringIndex, noteIndex: slotIndex });
+                                        // Ensure note exists at this position
+                                        ensureNoteAtPosition(timestamp, stringIndex, slotIndex);
+                                        // Select all text on focus for easy replacement
+                                        e.target.select();
+                                      }}
+                                      onBlur={() => {
+                                        setIsTypingNote(false);
+                                        if (focusedTabCellRef.current?.barIndex === barIndex &&
+                                            focusedTabCellRef.current?.stringIndex === stringIndex &&
+                                            focusedTabCellRef.current?.noteIndex === slotIndex) {
+                                          setFocusedTabCell(null);
+                                        }
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation(); // Prevent parent click handler
+                                      }}
+                                      className="w-full h-full text-xs font-mono text-gray-900 dark:text-gray-100 
+                                               bg-transparent border-0 cursor-text relative z-20
+                                               focus:outline-none focus:ring-0
+                                               transition-colors text-center"
+                                      style={{ fontSize: '11px', padding: '0', margin: '0', marginTop: '-4px', textAlign: 'center', lineHeight: '20px', verticalAlign: 'middle' }}
+                                    />
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
                         })}
