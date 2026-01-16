@@ -12,6 +12,7 @@ export interface SavedAudioItem {
   bpm?: number | null;
   offset?: number | null;
   noteTrack?: Record<string, string>; // Keys: `${timestamp}-${segmentIndex}` (0-3)
+  guitarTab?: Record<string, string>; // Keys: `${timestamp}-${segmentIndex}-${stringIndex}` (0-5)
   dateAdded: string; // ISO string
   lastAccessed: string; // ISO string
 }

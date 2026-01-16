@@ -60,6 +60,8 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 
 interface WavePlayerProps {
   audioUrl: string;
+  title?: string;
+  description?: string;
   showHelp?: boolean;
   onHelpClose?: () => void;
   zoomLevel?: number;
@@ -71,6 +73,8 @@ interface WavePlayerProps {
   onOffsetChange?: (offset: number | null) => void;
   initialNotes?: Record<string, string>; // Keys: `${timestamp}-${segmentIndex}` (0-3)
   onNotesChange?: (notes: Record<string, string>) => void;
+  initialTabData?: Record<string, string>; // Keys: `${timestamp}-${segmentIndex}` (0-3)
+  onTabChange?: (tabData: Record<string, string>) => void;
 }
 
 interface Region {
@@ -81,6 +85,8 @@ interface Region {
 
 export default function WavePlayer({
   audioUrl,
+  title,
+  description,
   showHelp: externalShowHelp,
   onHelpClose,
   zoomLevel: externalZoomLevel,
@@ -92,6 +98,8 @@ export default function WavePlayer({
   onOffsetChange,
   initialNotes,
   onNotesChange,
+  initialTabData,
+  onTabChange,
 }: WavePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -99,6 +107,7 @@ export default function WavePlayer({
   const loopIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const noteTrackRef = useRef<HTMLDivElement>(null);
+  const guitarTabRef = useRef<HTMLDivElement>(null);
   const autoScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isAutoScrollingRef = useRef<boolean>(false); // Flag to prevent scroll event from disabling autoscroll
   const isSyncingScrollRef = useRef<boolean>(false); // Flag to prevent infinite scroll sync loops
@@ -141,6 +150,22 @@ export default function WavePlayer({
   const metronomeVolumeRef = useRef(0.3); // Ref to always have latest volume value
   const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null); // Metronome interval
   const audioContextRef = useRef<AudioContext | null>(null); // Web Audio context for metronome clicks
+  const [showGuitarTab, setShowGuitarTab] = useState(false); // Show/hide guitar tab
+  const [tabData, setTabData] = useState<Record<string, string>>(() => {
+    // Convert old format (Record<number, string>) to new format (Record<string, string>)
+    if (!initialTabData) return {};
+    const converted: Record<string, string> = {};
+    for (const [key, value] of Object.entries(initialTabData)) {
+      // If key is a number (old format), convert to new format with segment 0
+      if (/^\d+\.?\d*$/.test(key)) {
+        converted[`${key}-0`] = value;
+      } else {
+        // Already in new format
+        converted[key] = value;
+      }
+    }
+    return converted;
+  }); // Tab data by segment: `${timestamp}-${segmentIndex}`
   
   // Sync BPM/offset/notes from parent when loading a saved item
   useEffect(() => {
@@ -169,6 +194,21 @@ export default function WavePlayer({
       setNotes(converted);
     }
   }, [initialNotes]);
+  
+  useEffect(() => {
+    if (initialTabData) {
+      // Convert old format to new format if needed
+      const converted: Record<string, string> = {};
+      for (const [key, value] of Object.entries(initialTabData)) {
+        if (/^\d+\.?\d*$/.test(key)) {
+          converted[`${key}-0`] = value;
+        } else {
+          converted[key] = value;
+        }
+      }
+      setTabData(converted);
+    }
+  }, [initialTabData]);
   // Use external control if provided, otherwise use internal state
   const showHelp = externalShowHelp !== undefined ? externalShowHelp : internalShowHelp;
   const handleHelpClose = () => {
@@ -506,6 +546,20 @@ export default function WavePlayer({
     });
   };
 
+  const handleTabChange = (timestamp: number, segmentIndex: number, stringIndex: number, value: string) => {
+    const key = `${timestamp}-${segmentIndex}-${stringIndex}`;
+    setTabData(prev => {
+      const updated = {
+        ...prev,
+        [key]: value,
+      };
+      if (onTabChange) {
+        onTabChange(updated);
+      }
+      return updated;
+    });
+  };
+
   const handleSetOffsetFromCursor = () => {
     if (!wavesurferRef.current) return;
     const current = wavesurferRef.current.getCurrentTime();
@@ -812,7 +866,11 @@ export default function WavePlayer({
     const syncScroll = () => {
       if (containerRef.current && noteTrackRef.current) {
         // Use waveform as source of truth
-        noteTrackRef.current.scrollLeft = containerRef.current.scrollLeft;
+        const scrollLeft = containerRef.current.scrollLeft;
+        noteTrackRef.current.scrollLeft = scrollLeft;
+        if (guitarTabRef.current) {
+          guitarTabRef.current.scrollLeft = scrollLeft;
+        }
       }
     };
     
@@ -837,6 +895,7 @@ export default function WavePlayer({
         animationFrameId = requestAnimationFrame(updateScroll);
         return;
       }
+      // Guitar tab ref is optional (only exists if tab is visible)
       if (!wavesurferRef.current) {
         animationFrameId = requestAnimationFrame(updateScroll);
         return;
@@ -854,10 +913,13 @@ export default function WavePlayer({
       // Center the playhead in the viewport
       const targetScrollLeft = Math.max(0, playheadPosition - containerWidth / 2);
       
-      // Scroll both containers atomically
+      // Scroll all containers atomically
       isSyncingScrollRef.current = true;
       containerRef.current.scrollLeft = targetScrollLeft;
       noteTrackRef.current.scrollLeft = targetScrollLeft;
+      if (guitarTabRef.current) {
+        guitarTabRef.current.scrollLeft = targetScrollLeft;
+      }
       isSyncingScrollRef.current = false;
       
       // Continue animation loop
@@ -896,9 +958,16 @@ export default function WavePlayer({
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 relative">
       {/* Header */}
-      <h2 className="text-2xl font-semibold mb-6 text-gray-800 dark:text-gray-100">
-        Audio Player
-      </h2>
+      <div className="mb-6">
+        <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+          {title || "Audio Player"}
+        </h2>
+        {description && (
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            {description}
+          </p>
+        )}
+      </div>
 
       {/* Waveform Container */}
       <div className="mb-2">
@@ -1087,6 +1156,23 @@ export default function WavePlayer({
         
         return (
           <div className="mb-6">
+            {/* Note Track Header with Guitar Tab Toggle */}
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Note Track</h3>
+              <button
+                onClick={() => setShowGuitarTab(!showGuitarTab)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600
+                         text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800
+                         hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                title={showGuitarTab ? "Hide Guitar Tab" : "Show Guitar Tab"}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} 
+                     className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 001.632 2.163l1.32.377a1.803 1.803 0 01-.99 3.467l-2.31-.66A2.25 2.25 0 019 19.553V15.553z" />
+                </svg>
+                <span>{showGuitarTab ? "Hide Tab" : "Show Tab"}</span>
+              </button>
+            </div>
             <div
               ref={noteTrackRef}
               className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2 overflow-x-auto overflow-y-hidden hide-scrollbar"
@@ -1102,9 +1188,13 @@ export default function WavePlayer({
               // Set flag to prevent infinite loop
               isSyncingScrollRef.current = true;
               
-              // Sync waveform scroll with note track scroll
+              // Sync waveform, note track, and guitar tab scrolls
+              const scrollLeft = e.currentTarget.scrollLeft;
               if (containerRef.current) {
-                containerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                containerRef.current.scrollLeft = scrollLeft;
+              }
+              if (guitarTabRef.current) {
+                guitarTabRef.current.scrollLeft = scrollLeft;
               }
               
               // Disable autoscroll when user manually scrolls
@@ -1264,6 +1354,261 @@ export default function WavePlayer({
             </div>
           </div>
         </div>
+        );
+      })()}
+
+      {/* Guitar Tab Section */}
+      {duration > 0 && !isLoading && !error && showGuitarTab && (() => {
+        const alignmentOffset = 8;
+        const guitarStrings = ['E', 'B', 'G', 'D', 'A', 'E']; // Standard tuning from high to low
+        
+        return (
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Guitar Tab</h3>
+            </div>
+            <div
+              ref={guitarTabRef}
+              className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2 overflow-x-auto overflow-y-hidden hide-scrollbar"
+              style={{
+                height: '136px',
+                minHeight: '136px',
+                maxHeight: '136px',
+              }}
+              onScroll={(e) => {
+                // Skip if autoscrolling or already syncing
+                if (isAutoScrollingRef.current || isSyncingScrollRef.current) return;
+                
+                // Set flag to prevent infinite loop
+                isSyncingScrollRef.current = true;
+                
+                // Sync waveform, note track, and tab scrolls
+                if (containerRef.current) {
+                  containerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                }
+                if (noteTrackRef.current) {
+                  noteTrackRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                }
+                
+                // Disable autoscroll when user manually scrolls
+                handleManualScroll();
+                
+                // Reset flag after a short delay
+                setTimeout(() => {
+                  isSyncingScrollRef.current = false;
+                }, 0);
+              }}
+            >
+                  {(() => {
+                const tabContentHeight = guitarStrings.length * 20; // 120px for 6 strings (0-100px positions, but need to include the last line)
+                const containerHeight = 136; // Container height with padding (p-2 = 8px top + 8px bottom = 16px, content area = 120px)
+                const topOffset = (containerHeight - tabContentHeight - 16) / 2; // Center vertically accounting for padding
+                
+                return (
+                  <div
+                    className="relative h-full"
+                    style={{
+                      width: zoomLevel > 0 ? `${duration * zoomLevel}px` : '100%',
+                      minWidth: '100%'
+                    }}
+                  >
+                    {/* Content wrapper - centered vertically */}
+                    <div
+                      className="relative"
+                      style={{
+                        width: '100%',
+                        height: `${tabContentHeight}px`,
+                        top: `${8 + topOffset}px`, // Container padding (8px) + vertical offset
+                      }}
+                    >
+                      {/* Current bar background highlight - only extend between top and bottom horizontal lines */}
+                      {getNoteTimestamps().map((timestamp, index) => {
+                        const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                        const barWidth = getBarWidth();
+                        if (!isCurrentBar) return null;
+                        const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
+                        const isFirstBar = index === 0;
+                        
+                        return (
+                          <div
+                            key={`tab-highlight-${timestamp}`}
+                            className="absolute bg-blue-100/30 dark:bg-blue-900/20 pointer-events-none transition-all duration-200"
+                            style={{
+                              left: isFirstBar 
+                                ? '0px' // First bar starts at left edge to match horizontal lines
+                                : zoomLevel > 0 
+                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                  : `${(timestamp / duration) * 100}%`,
+                              width: zoomLevel > 0 
+                                ? `${barWidth * zoomLevel}px`
+                                : `${(barWidth / duration) * 100}%`,
+                              top: '0px', // Start at first horizontal line
+                              height: `${lastStringPosition}px`, // End at last horizontal line (100px)
+                            }}
+                          />
+                        );
+                      })}
+                      
+                      {/* Hover highlights for each bar - match grid line positions */}
+                      {getNoteTimestamps().map((timestamp, index) => {
+                        const barWidth = getBarWidth();
+                        const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
+                        const isFirstBar = index === 0;
+                        
+                        return (
+                          <div
+                            key={`tab-hover-${timestamp}`}
+                            className={`absolute transition-opacity duration-150 pointer-events-none ${
+                              hoveredSegment === `tab-${timestamp}`
+                                ? 'opacity-100 bg-blue-500/10 dark:bg-blue-400/10' 
+                                : 'opacity-0'
+                            }`}
+                            style={{
+                              left: isFirstBar 
+                                ? '0px' // First bar starts at left edge to match horizontal lines
+                                : zoomLevel > 0 
+                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                  : `${(timestamp / duration) * 100}%`,
+                              width: zoomLevel > 0 
+                                ? `${barWidth * zoomLevel}px`
+                                : `${(barWidth / duration) * 100}%`,
+                              top: '0px',
+                              height: `${lastStringPosition}px`,
+                            }}
+                          />
+                        );
+                      })}
+                      
+                      {/* Vertical grid lines for each bar - stay within top and bottom horizontal lines */}
+                      {getNoteTimestamps().map((timestamp, index) => {
+                        const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                        const lastStringPosition = (guitarStrings.length - 1) * 20; // Position of the last string (100px for 6 strings)
+                        const isFirstBar = index === 0;
+                        
+                        return (
+                          <div
+                            key={`tab-grid-${timestamp}`}
+                            className={`absolute transition-all duration-200 pointer-events-none ${
+                              isCurrentBar 
+                                ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
+                                : 'w-px bg-gray-300 dark:bg-gray-700'
+                            }`}
+                            style={{
+                              left: isFirstBar 
+                                ? '0px' // First vertical line starts at left edge to match horizontal lines
+                                : zoomLevel > 0 
+                                  ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                  : `${(timestamp / duration) * 100}%`,
+                              top: '0px', // Start at first horizontal line (0px)
+                              height: `${lastStringPosition}px`, // End at last horizontal line (100px)
+                            }}
+                          />
+                        );
+                      })}
+                  
+                  {/* 6 Horizontal grid lines (one for each string) */}
+                  {guitarStrings.map((stringName, stringIndex) => {
+                    const linePosition = stringIndex * 20;
+                    
+                    return (
+                      <div key={`string-line-${stringIndex}`}>
+                        {/* Horizontal grid line */}
+                        <div
+                          className="absolute left-0 right-0 border-b border-gray-300 dark:border-gray-700"
+                          style={{
+                            top: `${linePosition}px`,
+                            height: '0px',
+                          }}
+                        />
+                        
+                        {/* Tab inputs for each bar on this string */}
+                        {getNoteTimestamps().map((timestamp, barIndex) => {
+                          const barWidth = getBarWidth();
+                          const tabKey = `${timestamp}-${stringIndex}`;
+                          const isFirstBar = barIndex === 0;
+                          
+                          return (
+                            <div
+                              key={`tab-${timestamp}-${stringIndex}`}
+                              className="absolute"
+                              style={{
+                                left: isFirstBar 
+                                  ? '0px' // First bar starts at left edge to match horizontal lines
+                                  : zoomLevel > 0 
+                                    ? `${timestamp * zoomLevel - alignmentOffset}px`
+                                    : `${(timestamp / duration) * 100}%`,
+                                width: zoomLevel > 0 
+                                  ? `${barWidth * zoomLevel}px`
+                                  : `${(barWidth / duration) * 100}%`,
+                                top: `${linePosition}px`,
+                                height: '20px',
+                                minWidth: '60px'
+                              }}
+                              onMouseEnter={() => {
+                                // Set hover state for this specific bar
+                                setHoveredSegment(`tab-${timestamp}`);
+                              }}
+                              onMouseLeave={() => {
+                                setHoveredSegment(null);
+                              }}
+                            >
+                              
+                              {/* Single tab input for entire bar */}
+                              <input
+                                type="text"
+                                value={
+                                  // Check new format first (per bar), then fall back to old format (segment 0)
+                                  tabData[tabKey] || 
+                                  tabData[`${timestamp}-0-${stringIndex}`] || 
+                                  ''
+                                }
+                                onChange={(e) => {
+                                  // Store using new format: `${timestamp}-${stringIndex}`
+                                  const value = e.target.value;
+                                  const newKey = `${timestamp}-${stringIndex}`;
+                                  setTabData(prev => {
+                                    const updated = {
+                                      ...prev,
+                                      [newKey]: value,
+                                    };
+                                    if (onTabChange) {
+                                      onTabChange(updated);
+                                    }
+                                    return updated;
+                                  });
+                                }}
+                                onFocus={(e) => {
+                                  setIsTypingNote(true);
+                                  setHoveredSegment(`tab-${timestamp}`);
+                                }}
+                                onBlur={(e) => {
+                                  setIsTypingNote(false);
+                                  setHoveredSegment(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === 'Escape') {
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                placeholder=""
+                                className="w-full h-full px-2 py-0.5 text-xs font-mono text-gray-900 dark:text-gray-100 
+                                         bg-transparent border border-transparent cursor-text relative z-10
+                                         focus:ring-1 focus:ring-blue-500 focus:border-blue-400 dark:focus:border-blue-400
+                                         transition-colors text-center"
+                                style={{ fontSize: '11px' }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
         );
       })()}
 

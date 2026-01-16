@@ -33,6 +33,7 @@ export default function Home() {
   const [bpm, setBpm] = useState<number | null>(null);
   const [offset, setOffset] = useState<number | null>(null);
   const [noteTrack, setNoteTrack] = useState<Record<string, string>>({}); // Keys: `${timestamp}-${segmentIndex}`
+  const [guitarTab, setGuitarTab] = useState<Record<string, string>>({}); // Keys: `${timestamp}-${segmentIndex}-${stringIndex}`
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [recentSongs, setRecentSongs] = useState<SavedAudioItem[]>([]);
   
@@ -143,6 +144,7 @@ export default function Home() {
         bpm,
         offset,
         noteTrack,
+        guitarTab,
       });
     } else {
       // Save new
@@ -154,6 +156,7 @@ export default function Home() {
         bpm,
         offset,
         noteTrack,
+        guitarTab,
       });
       setCurrentSavedId(savedItem.id);
     }
@@ -188,6 +191,10 @@ export default function Home() {
       }
     }
     setNoteTrack(convertedNoteTrack);
+    
+    // Load guitar tab data
+    const guitarTabData = item.guitarTab ?? {};
+    setGuitarTab(guitarTabData);
     
     setCurrentSavedId(item.id);
     setSidebarOpen(false);
@@ -269,6 +276,7 @@ export default function Home() {
     setBpm(null);
     setOffset(null);
     setNoteTrack({});
+    setGuitarTab({});
     setCurrentSavedId(null);
     setError("");
     setValidationError("");
@@ -301,6 +309,7 @@ export default function Home() {
         bpm,
         offset,
         noteTrack,
+        guitarTab,
       });
     }, 800);
 
@@ -309,7 +318,7 @@ export default function Home() {
         clearTimeout(autoSaveTimeoutRef.current);
       }
     };
-  }, [currentSavedId, youtubeUrl, audioUrl, title, notes, bpm, offset, noteTrack]);
+  }, [currentSavedId, youtubeUrl, audioUrl, title, notes, bpm, offset, noteTrack, guitarTab]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800">
@@ -565,6 +574,8 @@ export default function Home() {
 
               <WavePlayer 
                 audioUrl={audioUrl} 
+                title={title}
+                description={notes}
                 showHelp={showHelp}
                 onHelpClose={() => setShowHelp(false)}
                 zoomLevel={zoomLevel}
@@ -576,6 +587,8 @@ export default function Home() {
                 onOffsetChange={setOffset}
                 initialNotes={noteTrack}
                 onNotesChange={setNoteTrack}
+                initialTabData={guitarTab}
+                onTabChange={setGuitarTab}
               />
 
               {/* Success Toast */}
