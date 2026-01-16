@@ -108,3 +108,19 @@ export function searchSavedItems(query: string): SavedAudioItem[] {
   );
 }
 
+/**
+ * Get the 5 most recently accessed songs
+ */
+export function getRecentSongs(limit: number = 5): SavedAudioItem[] {
+  const items = getSavedItems();
+  
+  // Sort by lastAccessed (most recent first)
+  const sorted = items.sort((a, b) => {
+    const dateA = new Date(a.lastAccessed).getTime();
+    const dateB = new Date(b.lastAccessed).getTime();
+    return dateB - dateA;
+  });
+  
+  return sorted.slice(0, limit);
+}
+

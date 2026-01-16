@@ -349,7 +349,19 @@ export default function WavePlayer({
       if (!isMounted) return;
       
       console.error("WaveSurfer error:", err);
-      setError("Failed to load audio");
+      
+      // Check if it's a 404 error
+      let errorMessage = "Failed to load audio";
+      if (err instanceof Error) {
+        const errorStr = err.toString();
+        if (errorStr.includes("404") || errorStr.includes("Not Found")) {
+          errorMessage = "Audio file not found. Please re-fetch the audio from YouTube.";
+        } else if (errorStr.includes("Failed to fetch")) {
+          errorMessage = "Network error. Please check your connection and try again.";
+        }
+      }
+      
+      setError(errorMessage);
       setIsLoading(false);
     });
 
@@ -1067,11 +1079,17 @@ export default function WavePlayer({
       )}
 
       {/* Horizontal Note Track */}
-      {duration > 0 && !isLoading && !error && (
-        <div className="mb-6">
-          <div
-            ref={noteTrackRef}
-            className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2 overflow-x-auto overflow-y-hidden hide-scrollbar"
+      {duration > 0 && !isLoading && !error && (() => {
+        // Offset to align with WaveSurfer cursor: accounts for padding difference
+        // WaveSurfer container: p-1 (4px), Note track container: p-2 (8px)
+        // Difference: 8px - 4px = 4px
+        const alignmentOffset = 8;
+        
+        return (
+          <div className="mb-6">
+            <div
+              ref={noteTrackRef}
+              className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2 overflow-x-auto overflow-y-hidden hide-scrollbar"
             style={{
               height: '80px',
               minHeight: '80px',
@@ -1105,61 +1123,60 @@ export default function WavePlayer({
                 minWidth: '100%'
               }}
             >
-              {/* Playhead indicator for offset adjustment */}
-              <div
-                className="absolute top-0 w-0.5 h-2 bg-blue-500 dark:bg-blue-400 z-20 pointer-events-none"
-                style={{
-                  left: zoomLevel > 0 
-                    ? `${(currentTime / duration) * duration * zoomLevel}px`
-                    : `${(currentTime / duration) * 100}%`,
-                  transform: 'translateX(-1px)'
-                }}
-              >
-                {/* Triangle indicator */}
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full">
-                  <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-blue-500 dark:border-t-blue-400"></div>
-                </div>
-              </div>
+                    {/* Playhead indicator for offset adjustment - aligned with WaveSurfer cursor */}
+                    <div
+                      className="absolute top-0 w-0.5 h-2 bg-blue-500 dark:bg-blue-400 z-20 pointer-events-none"
+                      style={{
+                        left: zoomLevel > 0 
+                          ? `${currentTime * zoomLevel - alignmentOffset}px`
+                          : `${(currentTime / duration) * 100}%`,
+                      }}
+                    >
+                      {/* Triangle indicator */}
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full">
+                        <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-blue-500 dark:border-t-blue-400"></div>
+                      </div>
+                    </div>
               
-              {/* Current bar background highlight */}
-              {getNoteTimestamps().map(timestamp => {
-                const isCurrentBar = getCurrentBarTimestamp() === timestamp;
-                const barWidth = getBarWidth();
-                if (!isCurrentBar) return null;
-                
-                return (
-                  <div
-                    key={`highlight-${timestamp}`}
-                    className="absolute top-0 bottom-0 bg-blue-100/30 dark:bg-blue-900/20 pointer-events-none transition-all duration-200"
-                    style={{
-                      left: zoomLevel > 0 
-                        ? `${(timestamp / duration) * duration * zoomLevel}px`
-                        : `${(timestamp / duration) * 100}%`,
-                      width: zoomLevel > 0 
-                        ? `${barWidth * zoomLevel}px`
-                        : `${(barWidth / duration) * 100}%`
-                    }}
-                  />
-                );
-              })}
-              
-              {/* Background grid lines for each bar */}
-              {getNoteTimestamps().map((timestamp, index) => {
-                const isCurrentBar = getCurrentBarTimestamp() === timestamp;
-                return (
-                  <div
-                    key={`grid-${timestamp}`}
-                    className={`absolute top-0 bottom-0 transition-all duration-200 ${
-                      isCurrentBar 
-                        ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
-                        : 'w-px bg-gray-300 dark:bg-gray-700'
-                    }`}
-                    style={{
-                      left: zoomLevel > 0 
-                        ? `${(timestamp / duration) * duration * zoomLevel}px`
-                        : `${(timestamp / duration) * 100}%`
-                    }}
-                  >
+                    {/* Current bar background highlight */}
+                    {getNoteTimestamps().map(timestamp => {
+                      const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                      const barWidth = getBarWidth();
+                      if (!isCurrentBar) return null;
+                      
+                      return (
+                        <div
+                          key={`highlight-${timestamp}`}
+                          className="absolute top-0 bottom-0 bg-blue-100/30 dark:bg-blue-900/20 pointer-events-none transition-all duration-200"
+                          style={{
+                            left: zoomLevel > 0 
+                              ? `${timestamp * zoomLevel - alignmentOffset}px`
+                              : `${(timestamp / duration) * 100}%`,
+                            width: zoomLevel > 0 
+                              ? `${barWidth * zoomLevel}px`
+                              : `${(barWidth / duration) * 100}%`
+                          }}
+                        />
+                      );
+                    })}
+                    
+                    {/* Background grid lines for each bar */}
+                    {getNoteTimestamps().map((timestamp, index) => {
+                      const isCurrentBar = getCurrentBarTimestamp() === timestamp;
+                      return (
+                        <div
+                          key={`grid-${timestamp}`}
+                          className={`absolute top-0 bottom-0 transition-all duration-200 ${
+                            isCurrentBar 
+                              ? 'w-0.5 bg-blue-500 dark:bg-blue-400 z-10' 
+                              : 'w-px bg-gray-300 dark:bg-gray-700'
+                          }`}
+                          style={{
+                            left: zoomLevel > 0 
+                              ? `${timestamp * zoomLevel - alignmentOffset}px`
+                              : `${(timestamp / duration) * 100}%`
+                          }}
+                        >
                     <div className={`text-xs font-mono mt-1 ml-1 ${
                       isCurrentBar 
                         ? 'text-blue-600 dark:text-blue-300 font-semibold' 
@@ -1171,19 +1188,19 @@ export default function WavePlayer({
                 );
               })}
 
-              {/* Note inputs at each bar - 4 segments per bar */}
-              {getNoteTimestamps().map(timestamp => {
-                const barWidth = getBarWidth();
-                const segmentWidth = barWidth / 4;
-                
-                return (
-                  <div
-                    key={`note-${timestamp}`}
-                    className="absolute top-6 flex"
-                    style={{
-                      left: zoomLevel > 0 
-                        ? `${(timestamp / duration) * duration * zoomLevel}px`
-                        : `${(timestamp / duration) * 100}%`,
+                    {/* Note inputs at each bar - 4 segments per bar */}
+                    {getNoteTimestamps().map(timestamp => {
+                      const barWidth = getBarWidth();
+                      const segmentWidth = barWidth / 4;
+                      
+                      return (
+                        <div
+                          key={`note-${timestamp}`}
+                          className="absolute top-6 flex"
+                          style={{
+                            left: zoomLevel > 0 
+                              ? `${timestamp * zoomLevel - alignmentOffset}px`
+                              : `${(timestamp / duration) * 100}%`,
                       width: zoomLevel > 0 
                         ? `${barWidth * zoomLevel}px` // Bar width in pixels
                         : `${(barWidth / duration) * 100}%`,
@@ -1247,7 +1264,8 @@ export default function WavePlayer({
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Controls */}
       <div className="space-y-4">

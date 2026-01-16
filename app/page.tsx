@@ -5,7 +5,7 @@ import { z } from "zod";
 import { youtubeUrlSchema } from "@/lib/validation";
 import WavePlayer from "@/components/WavePlayer";
 import SavedAudioSidebar from "@/components/SavedAudioSidebar";
-import { saveAudioItem, updateAudioItem, type SavedAudioItem } from "@/lib/savedAudio";
+import { saveAudioItem, updateAudioItem, getRecentSongs, type SavedAudioItem } from "@/lib/savedAudio";
 
 export default function Home() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -34,6 +34,7 @@ export default function Home() {
   const [offset, setOffset] = useState<number | null>(null);
   const [noteTrack, setNoteTrack] = useState<Record<string, string>>({}); // Keys: `${timestamp}-${segmentIndex}`
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [recentSongs, setRecentSongs] = useState<SavedAudioItem[]>([]);
   
   const handleZoomIn = () => {
     setZoomLevel(prev => {
@@ -161,11 +162,14 @@ export default function Home() {
     setShowSaveSuccess(true);
     setShowSaveForm(false);
     setTimeout(() => setShowSaveSuccess(false), 3000);
+    
+    // Refresh recent songs list
+    const recent = getRecentSongs(5);
+    setRecentSongs(recent);
   };
 
-  const handleLoadSavedItem = (item: SavedAudioItem) => {
+  const handleLoadSavedItem = async (item: SavedAudioItem) => {
     setYoutubeUrl(item.url);
-    setAudioUrl(item.audioUrl);
     setTitle(item.title);
     setNotes(item.notes);
     setBpm(item.bpm ?? null);
@@ -187,11 +191,73 @@ export default function Home() {
     
     setCurrentSavedId(item.id);
     setSidebarOpen(false);
-    setShowFetchBlock(false); // Hide fetch block when loading saved item
     setShowSaveForm(false);
+
+    // Verify audio file exists before loading
+    try {
+      const response = await fetch(item.audioUrl, { method: 'HEAD' });
+      if (!response.ok) {
+        // File doesn't exist (404 or other error), re-fetch from YouTube
+        console.log(`Audio file not found (${response.status}), re-fetching from YouTube...`);
+        setLoading(true);
+        setError("");
+        setShowFetchBlock(false);
+        
+        try {
+          const fetchResponse = await fetch("/api/download", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ url: item.url }),
+          });
+
+          const data = await fetchResponse.json();
+
+          if (!fetchResponse.ok) {
+            const errorMsg = data.details || data.error || "Failed to re-fetch audio";
+            setError(errorMsg);
+            setLoading(false);
+            setShowFetchBlock(true);
+            return;
+          }
+
+          if (data.status === "ready" && data.audioUrl) {
+            setAudioUrl(data.audioUrl);
+            setShowFetchBlock(false);
+            
+            // Update saved item with new audio URL
+            updateAudioItem(item.id, {
+              audioUrl: data.audioUrl,
+            });
+          } else {
+            setError("Unexpected response format");
+            setLoading(false);
+            setShowFetchBlock(true);
+          }
+        } catch (err) {
+          setError("An error occurred while re-fetching audio");
+          setLoading(false);
+          setShowFetchBlock(true);
+        }
+      } else {
+        // File exists, use it
+        setAudioUrl(item.audioUrl);
+        setShowFetchBlock(false);
+      }
+    } catch (err) {
+      // Network error or CORS issue, try to use the URL anyway
+      console.warn("Could not verify audio file, attempting to load:", err);
+      setAudioUrl(item.audioUrl);
+      setShowFetchBlock(false);
+    }
 
     // Update last accessed
     updateAudioItem(item.id, {});
+    
+    // Refresh recent songs list
+    const recent = getRecentSongs(5);
+    setRecentSongs(recent);
   };
 
   const handleNewSong = () => {
@@ -210,6 +276,13 @@ export default function Home() {
     setShowSaveForm(false);
     setShowSaveSuccess(false);
   };
+
+  // Load recent songs on mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const recent = getRecentSongs(5);
+    setRecentSongs(recent);
+  }, []);
 
   // Autosave timing and notes (and title/notes) for already-saved items
   useEffect(() => {
@@ -265,38 +338,80 @@ export default function Home() {
             </button>
           </div>
 
+          {/* Recent Songs Section */}
+          {recentSongs.length > 0 && showFetchBlock && (
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 mb-8">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100">
+                Recent Songs
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {recentSongs.map((song) => (
+                  <button
+                    key={song.id}
+                    onClick={() => handleLoadSavedItem(song)}
+                    className="text-left p-4 rounded-lg border border-gray-200 dark:border-gray-700
+                             bg-gray-50 dark:bg-gray-700/50
+                             hover:bg-gray-100 dark:hover:bg-gray-700
+                             hover:border-blue-300 dark:hover:border-blue-600
+                             transition-all duration-200 group"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          {song.title}
+                        </h3>
+                        {song.notes && (
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
+                            {song.notes}
+                          </p>
+                        )}
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                          {new Date(song.lastAccessed).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} 
+                           className="w-5 h-5 text-gray-400 dark:text-gray-500 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors flex-shrink-0">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                      </svg>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Fetch URL Block - Show on initial load and when "New Song" is clicked */}
           {showFetchBlock && (
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 mb-8">
-              <div className="space-y-6">
-                <div>
-                  <label
-                    htmlFor="youtube-url"
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                  >
-                    YouTube URL
-                  </label>
-                  <input
-                    id="youtube-url"
-                    type="text"
-                    value={youtubeUrl}
-                    onChange={(e) => setYoutubeUrl(e.target.value)}
-                    placeholder="https://www.youtube.com/watch?v=..."
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 mb-8">
+            <div className="space-y-6">
+              <div>
+                <label
+                  htmlFor="youtube-url"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                >
+                  YouTube URL
+                </label>
+                <input
+                  id="youtube-url"
+                  type="text"
+                  value={youtubeUrl}
+                  onChange={(e) => setYoutubeUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
                     className={`w-full px-4 py-3 rounded-lg border 
                              ${validationError && youtubeUrl ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                             bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
-                             focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                           bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                           focus:ring-2 focus:ring-blue-500 focus:border-transparent
                              transition-all duration-200`}
-                    disabled={loading}
-                  />
+                  disabled={loading}
+                />
                   {validationError && youtubeUrl && (
                     <p className="mt-2 text-sm text-red-600 dark:text-red-400">
                       {validationError}
                     </p>
                   )}
-                </div>
+              </div>
 
-                {error && (
+              {error && (
                   <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
                     <div className="flex items-start gap-2">
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" 
@@ -308,7 +423,7 @@ export default function Home() {
                           Error
                         </p>
                         <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-                          {error}
+                  {error}
                         </p>
                       </div>
                     </div>
@@ -324,24 +439,24 @@ export default function Home() {
                     <span className="text-sm text-blue-700 dark:text-blue-300">
                       Downloading and converting audio... This may take up to 2 minutes.
                     </span>
-                  </div>
-                )}
+                </div>
+              )}
 
-                <button
-                  onClick={handleFetchAudio}
+              <button
+                onClick={handleFetchAudio}
                   disabled={loading || !isValid}
-                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 
-                           hover:from-blue-700 hover:to-purple-700
-                           disabled:from-gray-400 disabled:to-gray-400
-                           text-white font-semibold py-3 px-6 rounded-lg
-                           transition-all duration-200 transform hover:scale-[1.02]
-                           disabled:cursor-not-allowed disabled:transform-none
-                           shadow-lg hover:shadow-xl"
-                >
-                  {loading ? "Fetching..." : "Fetch Audio"}
-                </button>
-              </div>
+                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 
+                         hover:from-blue-700 hover:to-purple-700
+                         disabled:from-gray-400 disabled:to-gray-400
+                         text-white font-semibold py-3 px-6 rounded-lg
+                         transition-all duration-200 transform hover:scale-[1.02]
+                         disabled:cursor-not-allowed disabled:transform-none
+                         shadow-lg hover:shadow-xl"
+              >
+                {loading ? "Fetching..." : "Fetch Audio"}
+              </button>
             </div>
+          </div>
           )}
 
           {/* Audio Player with Waveform */}
